@@ -255,34 +255,143 @@ def fact(row, num, pln):
     return line + (f"\n       {link}" if link else "")
 
 
+def day(text):
+    try:
+        return datetime.date.fromisoformat(str(text or ""))
+    except ValueError:
+        return None
+
+
+def has_bags(row):
+    """Сдаваемый багаж в цене — по строке Kiwi `bags p1/c1/h1` (kiwi_search.py); у fare-finder Ryanair
+    тариф Basic, у Google багаж неизвестен — при чемодане такие строки в кандидаты не идут."""
+    m = re.search(r"\bbags p\d+/c\d+/h(\d+)", str(row.get("raw") or ""))
+    return bool(m and int(m.group(1)) >= 1)
+
+
+def overnight(row):
+    """Прилёт туда на следующий день — по строке Kiwi «WAW→DOH→SIN 09:00→08:45 16h45» (kiwi_search.py:
+    вылет + длительность за полночь). Дальний прогон 15.09.2026: Kiwi на `--nights 10` отдал 16→27.11 —
+    11 календарных ночей, скрипт не собрал ни одной поездки. Часовые пояса не учитываются: ошибка —
+    лишняя ночь в окне, не потерянная поездка."""
+    m = re.search(r"(\d\d):(\d\d)→\d\d:\d\d (\d+)h(\d+)", str(row.get("raw") or ""))
+    return bool(m and int(m.group(1)) * 60 + int(m.group(2)) + int(m.group(3)) * 60 + int(m.group(4)) >= 24 * 60)
+
+
+def auto_candidates(rows, sources, nights, bags, home, pax):
+    """Все допустимые поездки из строк прогона: строка «туда/обратно» (Kiwi, Google) или пара одиночных
+    плеч (fare-finder, Google в одну сторону) с вылетом и прилётом в домашние аэропорты `home`, ночей в
+    `nights`, пассажиров `pax`. Эвалы 15.09.2026: сборка пар, отданная модели, три прогона подряд давала
+    три разных ответа при одних и тех же строках (Kiwi 167 за связку Ryanair 65 + 65). Возвращает
+    (кандидаты, сколько строк отброшено без багажа)."""
+    lo, hi = nights
+    flights = [r for r in rows if r.get("kind") in FLIGHT_KINDS and r.get("source_id") != "CALC"
+               and not is_ground(r, sources) and r.get("status") != "ORIENTIR"
+               and isinstance(r.get("value"), (int, float)) and r.get("pax") == pax]
+    no_bags = 0
+    if bags:
+        kept = [r for r in flights if has_bags(r)]
+        no_bags, flights = len(flights) - len(kept), kept
+    cands = []
+    for r in flights:                                    # поездка одной строкой
+        d = str(r.get("dates") or "").split("/")
+        if len(d) == 2 and day(d[0]) and day(d[1]):
+            segs = str(r.get("route") or "").split("/")
+            start, back = segs[0].partition("-")[0], (segs[-1].partition("-")[2] if len(segs) > 1 else segs[0].partition("-")[0])
+            spent = (day(d[1]) - day(d[0])).days - (1 if overnight(r) else 0)   # ночь в пути — не ночь там
+            if lo <= spent <= hi and start in home and back in home:
+                cands.append([r])
+    singles = [r for r in flights if day(r.get("dates"))]
+    for o in singles:                                    # пара плеч: X-Y туда, Y-Z обратно
+        x, _, y = str(o.get("route") or "").partition("-")
+        if x not in home:
+            continue
+        for b in singles:
+            y2, _, z = str(b.get("route") or "").partition("-")
+            if y2 == y and z in home and lo <= (day(b["dates"]) - day(o["dates"])).days <= hi:
+                cands.append([o, b])
+    return cands, no_bags
+
+
+def attach_ground(flights, rows, profile, sources, pln):
+    """К плечам кандидата — самая дешёвая живая дорога (`live_ground` профиля) на дату плеча, с её
+    доплатами (`of`); нет строки — сумму даст профиль в home_ground."""
+    airports = profile.get("home", {}).get("airports", {})
+    legs = []                                            # (домашний аэропорт, дата)
+    for r in flights:
+        segs, d = str(r.get("route") or "").split("/"), str(r.get("dates") or "").split("/")
+        if len(d) == 2:                                  # поездка одной строкой: вылет туда, прилёт обратно
+            legs += [(segs[0].partition("-")[0], d[0]),
+                     (segs[-1].partition("-")[2] if len(segs) > 1 else segs[0].partition("-")[0], d[1])]
+        else:                                            # одиночное плечо: домашний конец — любой из двух
+            legs += [(code, d[0]) for code in segs[0].split("-")]
+    extra = []
+    for code, date in legs:
+        src = (airports.get(code) or {}).get("live_ground")
+        if not src:
+            continue
+        ground = [g for g in rows if g.get("source_id") == src and g.get("kind") == "ground"
+                  and g.get("dates") == date and code in str(g.get("route") or "").split("-")
+                  and pln(g) is not None]
+        if ground:
+            g = min(ground, key=pln)
+            extra += [g] + [f for f in rows if f.get("of") == g["id"]]
+    return flights + extra
+
+
+def price_variant(name, vrows, rows, run, profile, sources, pax, num, new_rows, rates, failures):
+    """Сумма до двери одного варианта — общий код для --variant и --auto."""
+    plns = {r["id"]: pln_of(r, rows, run, new_rows, rates, failures) for r in vrows}
+    skip, notes = cheap_ground(vrows, plns, profile)
+    lines, total, missing, flights = [], 0.0, 0, []
+    for r in vrows:
+        pln = plns[r["id"]]
+        if pln is None:
+            missing += 1
+        elif r["id"] in skip:
+            continue                               # плечо дешевле порога — в заметке варианта, не строкой
+        else:
+            total += round(pln)                    # итог — сумма напечатанных целых, иначе «100+100=201»
+        lines.append(fact(r, num.get(r["id"], 0), pln))
+        if pln is not None and r.get("kind") in FLIGHT_KINDS and not is_ground(r, sources):
+            flights.append(pln)                    # злотые перевозок, вошедших в варианты
+    ground, ground_notes = home_ground(vrows, profile, pax)
+    total += ground
+    return {"name": name, "total": total, "missing": missing, "lines": lines, "rows": vrows, "ground": ground,
+            "notes": ground_notes + notes + ground_off_dates(vrows, sources), "flights": flights}
+
+
 def build(args, rows, profile):
     failures = dict(kv.split("=", 1) if "=" in kv else (kv, "сбой") for kv in (args.failed or []))
     new_rows, rates = [], {}
     variants = [parse_variant(v, rows) for v in args.variant]
     pax = args.pax or profile.get("travelers", {}).get("adults", 1)
     num = {r["id"]: i for i, r in enumerate(rows, 1)}
-    results = []
     sources = ground_sources(profile)
-    used_flights = []                                  # злотые перевозок, вошедших в варианты
-    for name, vrows in variants:
-        plns = {r["id"]: pln_of(r, rows, args.run, new_rows, rates, failures) for r in vrows}
-        skip, notes = cheap_ground(vrows, plns, profile)
-        lines, total, missing = [], 0.0, 0
-        for r in vrows:
-            pln = plns[r["id"]]
-            if pln is None:
-                missing += 1
-            elif r["id"] in skip:
-                continue                               # плечо дешевле порога — в заметке варианта, не строкой
-            else:
-                total += round(pln)                    # итог — сумма напечатанных целых, иначе «100+100=201»
-            lines.append(fact(r, num.get(r["id"], 0), pln))
-            if pln is not None and r.get("kind") in FLIGHT_KINDS and not is_ground(r, sources):
-                used_flights.append(pln)
-        ground, ground_notes = home_ground(vrows, profile, pax)
-        total += ground
-        results.append({"name": name, "total": total, "missing": missing, "lines": lines, "rows": vrows,
-                        "ground": ground, "notes": ground_notes + notes + ground_off_dates(vrows, sources)})
+    pln = lambda r: pln_of(r, rows, args.run, new_rows, rates, failures)   # noqa: E731
+    price = lambda name, vrows: price_variant(name, vrows, rows, args.run, profile, sources, pax, num,   # noqa: E731
+                                              new_rows, rates, failures)
+    results, auto_note = [], None
+    if getattr(args, "auto", False):
+        home = [c.strip() for c in (args.home or ",".join(profile.get("home", {}).get("airports", {}))).split(",")]
+        cands, no_bags = auto_candidates(rows, sources, args.nights, args.bags, home, pax)
+        seen, priced = set(), []
+        for c in cands:
+            key = tuple((r.get("route"), r.get("dates"), round(r["value"])) for r in c)   # дубли Kiwi одной цены
+            if key not in seen:
+                seen.add(key)
+                priced.append(price("auto", attach_ground(c, rows, profile, sources, pln)))
+        priced.sort(key=lambda v: (v["missing"] > 0, v["total"]))
+        for i, v in enumerate(priced[:args.top], 1):
+            v["name"] = f"auto-{i}"
+            results.append(v)
+        auto_note = (f"auto: кандидатов {len(cands)}, ночей {args.nights[0]}–{args.nights[1]}, из {','.join(home)}, "
+                     f"{pax} чел., {'с багажом' if args.bags else 'без багажа'}"
+                     + (f"; без багажа отброшено строк: {no_bags}" if no_bags else "")
+                     + ("" if priced else " — ни одной поездки не собрать: строк «туда/обратно» и пар плеч с такими "
+                        "ночами, аэропортами и пассажирами в прогоне нет; проверь --nights, --home, --pax"))
+    results += [price(name, vrows) for name, vrows in variants]
+    used_flights = [p for v in results for p in v["flights"]]
 
     complete = [v for v in results if not v["missing"]]
     best = min(complete, key=lambda v: v["total"]) if complete else None
@@ -304,8 +413,10 @@ def build(args, rows, profile):
     if first and last - first > RUN_SPAN_MAX:
         out.append(f"внимание: строки прогона с {first:%d.%m %H:%M} по {last:%d.%m %H:%M} — "
                    "не смешаны ли два запроса в одном run?")
+    if auto_note:
+        out.append(auto_note)
     for v in results:
-        head = f"{v['name']} = {v['total']:.0f} PLN до двери"
+        head = f"{v['name']} = {v['total']:.0f} PLN до двери (строки {'+'.join(str(num.get(r['id'], 0)) for r in v['rows'])})"
         if v["missing"]:
             head += f" (без {v['missing']} строк: курса нет)"
         if v["notes"]:
@@ -313,7 +424,7 @@ def build(args, rows, profile):
         out.append(head)
         out.extend(v["lines"])
     out.append("самый дешёвый до двери: " + (best["name"] if best else "не определён — нет полной суммы"))
-    if cheapest:
+    if cheapest and not auto_note:                     # при --auto все допустимые комбинации уже перебраны
         pln, r = cheapest
         out.append(f"дешевле в журнале, не в вариантах: {pln:.0f} PLN строка {num[r['id']]} "
                    f"({r.get('route')} {r.get('dates')} {r.get('source_id')})")
@@ -366,6 +477,15 @@ def to_drive(title, text, profile):
     return create_doc(drive, folder["id"], title, text).get("webViewLink", "")
 
 
+def nights_range(text):
+    lo, _, hi = text.partition("-")
+    try:
+        lo, hi = int(lo), int(hi or lo)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"ночей: «2-3» или «10», не {text!r}")
+    return (lo, hi)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--run", required=True)
@@ -376,10 +496,18 @@ def main():
     ap.add_argument("--variant", action="append", default=[], help="«A=1+3»: имя и строки через +")
     ap.add_argument("--failed", action="append", help="источник, который не ответил: id=причина")
     ap.add_argument("--pax", type=int, help="пассажиров; по умолчанию из профиля")
+    ap.add_argument("--auto", action="store_true", help="собрать варианты из строк прогона самому: "
+                    "поездки одной строкой и пары плеч, самые дешёвые до двери первыми (auto-1 — ★)")
+    ap.add_argument("--nights", type=nights_range, help="для --auto: ночей «2-3» или «10»")
+    ap.add_argument("--bags", type=int, choices=(0, 1), default=0, help="для --auto: 1 — только строки с чемоданом в цене")
+    ap.add_argument("--home", help="для --auto: домашние аэропорты через запятую (WAW,WMI); по умолчанию все из профиля")
+    ap.add_argument("--top", type=int, default=3, help="для --auto: сколько кандидатов печатать")
     ap.add_argument("--no-drive", action="store_true")
     ap.add_argument("--reports-dir", default=str(REPORTS))
     args = ap.parse_args()
 
+    if args.auto and not args.nights:
+        sys.exit("--auto без --nights: сколько ночей — из опроса, например --nights 2-3")
     rows, broken = run_rows(args.journal, args.run)
     if not rows:
         sys.exit(f"в журнале {args.journal} нет строк прогона {args.run}")
@@ -392,8 +520,8 @@ def main():
                   f"{str(r.get('raw') or '')[:60]}")
         print(f"прогон {args.run}: {len(rows)} строк" + (f"; битых строк в файле: {broken}" if broken else ""))
         return 0
-    if not args.title or not args.variant:
-        ap.error("нужны --title и хотя бы один --variant (или --list)")
+    if not args.title or not (args.variant or args.auto):
+        ap.error("нужны --title и --auto или хотя бы один --variant (или --list)")
 
     profile = load_profile(args.profile)
     out, results, new_rows = build(args, rows, profile)
