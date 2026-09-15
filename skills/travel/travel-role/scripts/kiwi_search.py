@@ -12,7 +12,7 @@ self_transfer_allowed: true — вариант может быть связко�
 Одна строка QUOTED на маршрут: route — фактические аэропорты (Kiwi подставляет WMI за WAW),
 dates — даты этого маршрута; kind=fare, если они совпали с запрошенными, иначе other_date.
 url — bookingUrl Kiwi; CONFIRMED только со страницы тарифа продавца.
-Тот же поиск в MCP-инструменте Лизы даёт то же самое, но строки журнала — только отсюда.
+Тот же поиск в MCP-инструменте агента даёт то же самое, но строки журнала — только отсюда.
 """
 
 import argparse
@@ -97,7 +97,7 @@ def flight_numbers(it):
 
 def leg_text(leg):
     # время плеч — в строке журнала, чтобы отчёт не ходил за ним в MCP или Google Flights
-    # (заметка Лизы 14.09.2026: «kiwi_search.py времена в строку не пишет»)
+    # (заметка агента 14.09.2026: «kiwi_search.py времена в строку не пишет»)
     dep, arr = leg.get("departureTime", "")[11:16], leg.get("arrivalTime", "")[11:16]
     text = "→".join(leg["route"]) + (f" {dep}→{arr}" if dep and arr else "")
     secs = leg.get("durationSeconds")          # время в пути со стыковками — прогон владельца 15.09.2026 его не назвал
