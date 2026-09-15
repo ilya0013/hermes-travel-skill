@@ -1,0 +1,7 @@
+# venv источников travel-роли — версии сняты с рабочего контейнера 15.09.2026
+# (/opt/data/travel/lib/venv, Python 3.13.5). Ставится install.sh через uv.
+mcp==2.2.0
+fast-flights==3.1.0
+flywizz==0.1.0
+ryanair-py==3.0.0
+requests==2.34.2
