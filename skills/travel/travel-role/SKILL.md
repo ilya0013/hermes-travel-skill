@@ -1,9 +1,9 @@
 ---
 name: travel-role
 description: "Поиск поездки для владельца: перелёт и дорога до двери, где купить дешевле. Включай, когда он просит билеты, рейсы, перелёт, «куда дешевле», «стоит ли ждать», 'find me a flight', 'cheap flights to', или говорит «травел-режим», «включи поиск билетов». По смыслу, не по точной фразе. Не покупает и не бронирует."
-version: 1.2.3
+version: 1.2.4
 author: hermes-travel-skill
-license: private
+license: MIT
 metadata:
   hermes:
     tags: [travel, flights, kiwi, ryanair, wizz]
