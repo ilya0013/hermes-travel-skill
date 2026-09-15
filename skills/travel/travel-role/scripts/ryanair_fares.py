@@ -31,12 +31,12 @@ ENDPOINT = "https://services-api.ryanair.com/farfnd/v4/oneWayFares"
 SELECT_PAGE = ("https://www.ryanair.com/pl/pl/trip/flights/select?adults=1&dateOut={day}"
                "&originIata={origin}&destinationIata={dest}&isReturn=false&discount=0")
 # без searchMode=ALL fare-finder отдаёт один самый дешёвый день окна, а не каждый день:
-# проверено 14.09.2026, WMI-BCN ±3 дня — 1 строка против 4 (заметка Лизы 13.09.2026)
+# проверено 14.09.2026, WMI-BCN ±3 дня — 1 строка против 4 (заметка агента 13.09.2026)
 SEARCH_ALL = {"searchMode": "ALL"}
 
 
 def select_link(origin, dest, day):
-    """Страница выбора рейса Ryanair на плечо и день, 1 взрослый — та, что открывала Лиза браузером."""
+    """Страница выбора рейса Ryanair на плечо и день, 1 взрослый — та, что открывал агент браузером."""
     return SELECT_PAGE.format(origin=origin, dest=dest, day=day)
 
 
@@ -129,7 +129,7 @@ def main():
         ap.error("--month в виде YYYY-MM и без --flex: месяц берётся целиком")
     run = journal.run_id(args)
     # эвал деградации: источник «упал» — до любой ветки, и --month тоже. Файл-флаг, потому что
-    # окружение в terminal Лизы не передаётся (проверено 15.09.2026: -e TRAVEL_FAULT не дошёл)
+    # окружение в terminal агента не передаётся (проверено 15.09.2026: -e TRAVEL_FAULT не дошёл)
     fault = os.path.join(os.path.dirname(os.path.abspath(args.journal)), ".fault")
     if os.environ.get("TRAVEL_FAULT") == "ryanair_api" or \
             (os.path.exists(fault) and "ryanair_api" in open(fault, encoding="utf-8").read()):

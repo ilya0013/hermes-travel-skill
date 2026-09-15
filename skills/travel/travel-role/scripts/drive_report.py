@@ -14,7 +14,7 @@
 creating the file», в таблице конвертаций Markdown → Docs. Первый живой документ 13.09 грузился
 как text/plain — в нём остались сырые `##` и `**`; с text/markdown заголовки и жирный
 становятся форматированием.
-На Диск ходит токеном Лизы через build_service скилла google-workspace — потому
+На Диск ходит токеном агента через build_service скилла google-workspace — потому
 запускается питоном Hermes (`/opt/hermes/.venv/bin/python3`), а не venv источников.
 Печатает JSON: {"doc_url": ..., "folder_url": ...}. Код возврата 1 — ссылка в отчёте
 без строки журнала (документ не создаётся).
@@ -71,7 +71,7 @@ def main():
     args = ap.parse_args()
 
     sys.path.insert(0, str(HERE))
-    sys.path.append(str(workspace_scripts()))   # в конец: скилл Лизы не должен затенять наши модули
+    sys.path.append(str(workspace_scripts()))   # в конец: скилл агента не должен затенять наши модули
     from report_render import render
     from verify_v3 import load_journal
     from google_api import build_service
