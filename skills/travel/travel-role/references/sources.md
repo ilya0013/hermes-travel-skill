@@ -40,7 +40,7 @@ fly4free.com). Наводка — ORIENTIR в валюте ленты; цену 
 |---|---|---|---|
 | `ryanair_fares.py` | HTTP 4xx/5xx, пусто | `google_flights.py --airline Ryanair`, затем Kiwi `--airlines FR`, затем страница ryanair.com своими глазами | `--failed ryanair_api=<код>` |
 | `google_flights.py` | код 1, «парсер fast-flights упал» (IndexError на варианте без цены — сбой источника, не «рейсов нет»: 15.09.2026 WAW→SIN у Kiwi был) | Kiwi без фильтра перевозчика; страница Google из stderr браузером; для Wizz — `wizz_farechart.py` (дата) + сайт своими глазами | `--failed google_flights=<причина>` |
-| `kiwi_search.py` | MCP не отвечает, пустая выдача | fare-finder + Google по плечам; связки — `--self-transfer` не подменять руками | `--failed kiwi_mcp=<причина>` |
+| `kiwi_search.py` | `Kiwi: сервер mcp.kiwi.com отказал 3 раза подряд` (сбой сервера Kiwi эпизодами по 40–60 с, от частоты не зависит — 16.09.2026; скрипт сам ждёт 20 и 40 с, терминалу давай `timeout` ≥ 240), пустая выдача | подождать минуту и повторить один раз; дальше fare-finder + Google по плечам; связки — `--self-transfer` не подменять руками | `--failed kiwi_mcp=<причина>` |
 | `flixbus_fares.py` | HTTP 400 (чужой id), пусто | профиль: ориентир Модлина; сайт flixbus своими глазами | строка профиля печатается сама |
 | курс НБП | `❌ nbp_api` в дайджесте | ничего: цена в валюте источника с пометкой «по курсу, на сайте может отличаться» | ставит `report.py` |
 | Диск | «Таблица на Диск не загрузилась» | черновик `/opt/data/travel/reports/<run>.md`, ссылка позже | ставит `report.py` |
