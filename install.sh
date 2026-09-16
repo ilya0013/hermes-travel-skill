@@ -80,7 +80,7 @@ fi
 if [ "$CHECK" = 1 ]; then
   D1=$(date -u -d "+30 days" +%Y-%m-%d); D2=$(date -u -d "+33 days" +%Y-%m-%d)
   HERMES_HOME="$H" "$PY" "$ROLE/scripts/kiwi_search.py" WAW BCN "$D1" "$D2" --top 2 --dry-run \
-    && echo "Kiwi отвечает: ок" || echo "внимание: Kiwi не ответил (сеть или mcp.kiwi.com), установка при этом цела"
+    && echo "Kiwi отвечает: ок" || echo "внимание: Kiwi не ответил (причина строкой выше: сбой mcp.kiwi.com или сеть), установка при этом цела"
 fi
 
 cat <<EOF

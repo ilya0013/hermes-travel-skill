@@ -19,6 +19,7 @@ import argparse
 import asyncio
 import json
 import sys
+import time
 
 import journal
 
@@ -27,6 +28,53 @@ MCP_URL = "https://mcp.kiwi.com/"
 # холодный вызов Kiwi отдаёт неполную выдачу: 15.09.2026 WAW→CPT searchTimeMs 9479 → минимум 4930 PLN,
 # повтор через 2 с (889 мс) → 3400; WAW→SIN 3352 → 3083. Тёплый вызов — 0,9–2,6 с.
 COLD_MS = 5000
+# сервер Kiwi отказывает эпизодами на десятки секунд, от частоты не зависит (зонд 16.09.2026 на чистом
+# агенте: 12:41–12:52 и 14:44–14:50 UTC — MCPError -32603 без data, попутно обрывы SSL; в 12:53 12 вызовов
+# впритык прошли). Установка и поиск у участника попали в такой эпизод и упали трассой. Паузы и повторы
+# перекрывают эпизод; пауза перед повтором холодного — чтобы не бить впритык.
+REFUSAL_WAITS = (20, 40)
+WARM_PAUSE = 3
+
+
+class KiwiRefused(RuntimeError):
+    """Сервер MCP отказал на все попытки."""
+
+
+def _leaves(exc):
+    if isinstance(exc, BaseExceptionGroup):
+        for e in exc.exceptions:
+            yield from _leaves(e)
+    else:
+        yield exc
+
+
+def refusal_reason(exc):
+    """Чем отказал сервер (MCPError, обрыв соединения) — или None, если ошибка другая и её надо показать."""
+    for e in _leaves(exc):
+        name = type(e).__name__
+        if name == "MCPError":
+            return f"MCPError code {getattr(e, 'code', '?')}"
+        if isinstance(e, (ConnectionError, OSError)) or name in ("ConnectError", "ReadTimeout", "RemoteProtocolError"):
+            return f"{name}: {str(e)[:60]}"
+    return None
+
+
+def call_with_retries(args, call=None, waits=REFUSAL_WAITS, sleep=time.sleep):
+    """Один вызов search-flight; отказ сервера — пауза и повтор, после всех попыток KiwiRefused."""
+    call = call or (lambda a: asyncio.run(search(a)))
+    reason = None
+    for i, wait in enumerate((0,) + tuple(waits)):
+        if wait:
+            print(f"Kiwi: сервер отказал ({reason}) — пауза {wait} с, повтор {i}/{len(waits)}", file=sys.stderr)
+            sleep(wait)
+        try:
+            return call(args)
+        except Exception as exc:                       # noqa: BLE001 — чужие ошибки пробрасываются ниже
+            reason = refusal_reason(exc)
+            if reason is None:
+                raise
+    raise KiwiRefused(f"сервер mcp.kiwi.com отказал {len(waits) + 1} раза подряд ({reason}) — "
+                      "сбой на стороне Kiwi, подождать минуту и повторить")
 
 
 def build_args(ns):
@@ -61,13 +109,14 @@ async def search(args, url=MCP_URL):
         return data
 
 
-def search_warm(args, call=None):
-    """Выдача search-flight; холодный вызов (searchTimeMs выше COLD_MS) повторяется один раз."""
-    call = call or (lambda a: asyncio.run(search(a)))
+def search_warm(args, call=None, sleep=time.sleep):
+    """Выдача search-flight; холодный вызов (searchTimeMs выше COLD_MS) повторяется один раз, после паузы."""
+    call = call or call_with_retries
     data = call(args)
     ms = data.get("searchTimeMs") or 0
     if ms > COLD_MS:
-        print(f"Kiwi: холодный вызов ({ms} мс), выдача неполная — повтор", file=sys.stderr)
+        print(f"Kiwi: холодный вызов ({ms} мс), выдача неполная — повтор через {WARM_PAUSE} с", file=sys.stderr)
+        sleep(WARM_PAUSE)
         try:
             data = call(args)
         except Exception as exc:                       # noqa: BLE001 — повтор упал: холодная выдача лучше пустой
@@ -184,7 +233,11 @@ def main():
             ap.error("DATE_BACK не сочетается с --out-to/--nights: окно само задаёт даты возврата — убери DATE_BACK")
         args = build_args(ns)
 
-    data = search_warm(args)
+    try:
+        data = search_warm(args)
+    except KiwiRefused as exc:                         # без трейсбека: причина одной строкой, exit 1
+        print(f"Kiwi: {exc}", file=sys.stderr)
+        return 1
     print(f"query: {data.get('query')}  results: {data.get('resultsCount')}  searchTimeMs: {data.get('searchTimeMs')}")
     rows = rows_for_itineraries(run, data, args, ns.top, wanted_dates_of(args))
     if not rows:
