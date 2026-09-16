@@ -20,9 +20,11 @@
 
 `--interest` — файл или каталог файлов `<имя>.json` (нет пути — интересов нет):
     {"name": "turcja", "match": "турци,turcja,antalya", "from": "WAW", "until": "2026-11-30",
-     "max_pln": 1500, "from_poland": true}
+     "max_pln": 1500, "from_poland": true, "owner_said": "да, Турция до конца ноября до 1500"}
 `match` — строка через запятую (без запятых — через пробел) или список. Интерес действует по `until` (ISO `YYYY-MM-DD`)
-включительно, потом гаснет сам. `from_poland` по умолчанию true. Файл, который не разобрать
+включительно, потом гаснет сам. `from_poland` по умолчанию true. `owner_said` — слова владельца
+дословно, обязательно: без них файл интересом не считается (14.09.2026 агент завёл интерес, не
+спросив владельца); в заголовке свода они печатаются. Файл, который не разобрать
 (не JSON, `until` не дата, `max_pln` не число) — пропускается со строкой в stderr, остальные
 работают. Наводки: заголовок, дата, ссылка, сгруппированы по интересу; с ценой в PLN выше
 `max_pln` отбрасываются (и не считаются показанными). Превью Telegram — только последние ~20
@@ -197,17 +199,36 @@ def load_seen(path):
         return {line.strip() for line in fh if line.strip()}
 
 
+def _interest_paths(path):
+    if os.path.isdir(path):
+        return sorted(os.path.join(path, f) for f in os.listdir(path) if f.endswith(".json"))
+    return [path] if os.path.isfile(path) else []
+
+
+def interest_names(path):
+    """Имена интересов, чьи файлы есть (снятый = файла нет; битый или истёкший файл ещё лежит
+    и свою копилку сохраняет)."""
+    names = set()
+    for fp in _interest_paths(path):
+        name = os.path.splitext(os.path.basename(fp))[0]
+        try:
+            with open(fp, encoding="utf-8") as fh:
+                name = str(json.load(fh).get("name", name))
+        except (OSError, ValueError, AttributeError):
+            pass
+        names.add(name)
+    return names
+
+
+_DRAFTS = []  # имена файлов без слова владельца из последнего load_interests — строка в своде
+
+
 def load_interests(path, today):
     """Действующие интересы из файла или каталога *.json; нет пути — нет интересов.
     Истёкшие и неразобранные файлы — строкой в stderr, остальные работают."""
-    if os.path.isdir(path):
-        paths = sorted(os.path.join(path, f) for f in os.listdir(path) if f.endswith(".json"))
-    elif os.path.isfile(path):
-        paths = [path]
-    else:
-        return []
     active = []
-    for fp in paths:
+    _DRAFTS.clear()
+    for fp in _interest_paths(path):
         name = os.path.splitext(os.path.basename(fp))[0]
         try:
             with open(fp, encoding="utf-8") as fh:
@@ -221,6 +242,14 @@ def load_interests(path, today):
                 cfg["max_pln"] = float(cfg["max_pln"])
         except (OSError, ValueError, KeyError, TypeError) as exc:
             print(f"интерес {name}: файл не разобран ({exc}) — пропущен", file=sys.stderr)
+            continue
+        # 14.09.2026 агент завёл интерес «Испания», не спросив владельца (подтверждено 16.09): интерес без
+        # дословной фразы владельца не действует — файл не интерес, а черновик
+        cfg["owner_said"] = " ".join(str(cfg.get("owner_said") or "").split())[:160]
+        if not cfg["owner_said"]:
+            print(f"интерес {cfg['name']}: нет слова владельца (`owner_said`) — не действует; "
+                  "спроси владельца и запиши его ответ дословно или удали файл", file=sys.stderr)
+            _DRAFTS.append(cfg["name"])
             continue
         if cfg.get("until") and cfg["until"] < today:
             print(f"интерес {cfg['name']}: истёк {cfg['until']}", file=sys.stderr)
@@ -329,14 +358,20 @@ def main():
                 head = f"## интерес {cfg['name']}: {','.join(cfg['terms'])}"
                 head += f", до {cfg['until']}" if cfg.get("until") else ""
                 head += f", потолок {cfg['max_pln']:g} PLN" if cfg.get("max_pln") is not None else ""
+                head += f" — по слову владельца: «{cfg['owner_said']}»"
                 out.extend([head, *leads, ""])
             print("\n".join(summary), file=sys.stderr)
         if not interests:
             print("действующих интересов нет — тишина", file=sys.stderr)
         digest = "\n".join(out)
+        digest_day = date.today().isoweekday() == args.digest_weekday
         if args.pending:
-            digest = pending_digest(args.pending, digest, date.today().isoweekday() == args.digest_weekday,
-                                    args.dry_run)
+            digest = pending_digest(args.pending, digest, digest_day, args.dry_run, interest_names(args.interest))
+        # ревью 16.09.2026: stderr при коде 0 cron отбрасывает — о файле без слова владельца агент и владелец
+        # узнают раз в неделю строкой в своде (истёкший файл — штатно, о нём молчим)
+        if _DRAFTS and (digest_day or not args.pending):
+            digest += (f"интересы без слова владельца, не действуют: {', '.join(sorted(_DRAFTS))} — "
+                       "спроси владельца и запиши ответ в `owner_said` или удали файл\n")
         print(digest, end="")
         with contextlib.redirect_stdout(sys.stderr):
             _save_seen(args, shown)
@@ -356,19 +391,33 @@ def _no_feeds():
     return 1
 
 
-def pending_digest(path, fresh, digest_day, dry_run):
+def pending_digest(path, fresh, digest_day, dry_run, active_names=None):
     """Копит свежие наводки в файле; в день свода возвращает всё накопленное и очищает файл,
-    в остальные дни — пустую строку. При --dry-run файл не меняется."""
+    в остальные дни — пустую строку. При --dry-run файл не меняется. Накопленное по интересу,
+    которого больше нет (владелец снял его до свода, 16.09.2026 — «Испания»), в свод не идёт."""
     kept = ""
     if os.path.exists(path):
         with open(path, encoding="utf-8") as fh:
             kept = fh.read()
+    if active_names is not None:
+        kept = _only_active_blocks(kept, active_names)
     if dry_run:
         return kept + fresh if digest_day else ""
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with open(path, "w" if digest_day else "a", encoding="utf-8") as fh:
         fh.write("" if digest_day else fresh)
     return kept + fresh if digest_day else ""
+
+
+def _only_active_blocks(text, active_names):
+    """Блоки копилки начинаются строкой `## интерес <имя>: …`; остаются блоки действующих интересов."""
+    out, keep = [], False
+    for line in text.splitlines(keepends=True):
+        if line.startswith("## интерес "):
+            keep = line[len("## интерес "):].split(":", 1)[0] in active_names
+        if keep:
+            out.append(line)
+    return "".join(out)
 
 
 def _save_seen(args, shown):
