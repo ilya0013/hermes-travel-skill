@@ -6,7 +6,8 @@
 обёртка cron `/opt/data/scripts/travel/interest_digest.sh`) пишут журнал через общий `journal.py`; что каждый
 даёт и как звать — `../references/sources.md`. Запускаются venv источников
 `/opt/data/travel/lib/venv`, не Python Hermes. Их модульные тесты — `tests/test_travel_scripts.py`
-в репозитории.
+в репозитории. Витрина наводок `sales_sheet.py` (Google Sheet «Распродажи» в «Поездках») — исключение:
+её зовёт `deal_feeds.py` питоном Hermes, потому что ходит токеном агента, как `drive_report.py`.
 
 ## Отчёт для человека: report_render и drive_report
 
