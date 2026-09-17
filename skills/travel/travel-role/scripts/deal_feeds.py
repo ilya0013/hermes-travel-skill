@@ -33,6 +33,13 @@
 `--digest-weekday` (ISO: 1 — понедельник); в остальные дни stdout пуст. Без `--pending` —
 печать сразу. Нет действующих интересов или новых наводок — stdout пуст.
 Служебные строки (записи журнала, «записей N») в этом режиме идут в stderr.
+В том же режиме, и без единого интереса, читаются «заметные» ленты (`NOTABLE`: теги перевозчиков и
+регионов fly4free.pl, TravelFree Poland/Asia, Pepper «bilety lotnicze»): их записи с ценой в заголовке
+идут в копилку блоком «## заметное вне интереса» (до NOTABLE_PER_DAY в день, в своде — до NOTABLE_IN_DIGEST
+свежих), а записи со словом о распродаже в заголовке (FLASH_WORDS) — сразу в stdout в день сбора блоком
+«## ⚡ распродажа сегодня»: до понедельника такая акция не доживает (владелец 17.09.2026). Каждая
+журналируемая наводка дописывается в Google Sheet «Распродажи» (`sales_sheet.py`, питон Hermes, токен
+агента); нет Google — строка в stderr, свод не страдает; `--no-sheet` выключает.
 В журнал идут наводки с ценой в заголовке,
 в валюте как есть (злотые считает report.py курсом НБП — решение 14.09.2026) — строкой kind=lead,
 статус ORIENTIR, dates — дата публикации (даты поездки в raw), route — вылет задачи и совпавшее
@@ -49,6 +56,7 @@ import html
 import json
 import os
 import re
+import subprocess
 import sys
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -66,7 +74,59 @@ FEEDS = {
     "vandrouki_by": "https://vandrouki.by/feed/",
     "tg_vandroukiby": "tg:vandroukiby",
     "tg_wakacyjnipiracipl": "tg:wakacyjnipiracipl",
+    # Ленты, уже отфильтрованные у источника (исследование 17.09.2026, `docs/research/2026-09-17-deal-sources-*`):
+    # fly4free.pl отдаёт RSS по тегу перевозчика и региона — редакция сама отбирает распродажи с вылетом из
+    # Польши в PLN; TravelFree — Европа→Азия в EUR; Pepper «bilety lotnicze» — читатели постят акции в день выхода.
+    # Все 23 тега проверены 17.09.2026: RSS 2.0, 17–20 записей; дремлющие (Cathay 08.2025, China Airlines 12.2025,
+    # Korean 05.2026, Singapore 06.2026) оставлены — редкие, но живые.
+    "f4f_qatar": "https://www.fly4free.pl/tag/qatar-airways/feed/",
+    "f4f_emirates": "https://www.fly4free.pl/tag/emirates/feed/",
+    "f4f_etihad": "https://www.fly4free.pl/tag/etihad/feed/",
+    "f4f_turkish": "https://www.fly4free.pl/tag/turkish-airlines/feed/",
+    "f4f_finnair": "https://www.fly4free.pl/tag/finnair/feed/",
+    "f4f_klm": "https://www.fly4free.pl/tag/klm/feed/",
+    "f4f_airfrance": "https://www.fly4free.pl/tag/air-france/feed/",
+    "f4f_lufthansa": "https://www.fly4free.pl/tag/lufthansa/feed/",
+    "f4f_lot": "https://www.fly4free.pl/tag/pll-lot/feed/",
+    "f4f_wizz": "https://www.fly4free.pl/tag/wizz-air/feed/",
+    "f4f_ryanair": "https://www.fly4free.pl/tag/ryanair/feed/",
+    "f4f_singapore": "https://www.fly4free.pl/tag/singapore-airlines/feed/",
+    "f4f_airchina": "https://www.fly4free.pl/tag/air-china/feed/",
+    "f4f_korean": "https://www.fly4free.pl/tag/korean-air/feed/",
+    "f4f_chinaairlines": "https://www.fly4free.pl/tag/china-airlines/feed/",
+    "f4f_eva": "https://www.fly4free.pl/tag/eva-air/feed/",
+    "f4f_cathay": "https://www.fly4free.pl/tag/cathay-pacific/feed/",
+    "f4f_azja": "https://www.fly4free.pl/tag/azja/feed/",
+    "f4f_tajlandia": "https://www.fly4free.pl/tag/tajlandia/feed/",
+    "f4f_wietnam": "https://www.fly4free.pl/tag/wietnam/feed/",
+    "f4f_japonia": "https://www.fly4free.pl/tag/japonia/feed/",
+    "f4f_wyprzedaz": "https://www.fly4free.pl/tag/wyprzedaz/feed/",
+    "fly4free_com_asia": "https://www.fly4free.com/tag/asia-deal/feed/",
+    "travelfree_pl": "https://travelfree.info/category/poland/feed/",
+    "travelfree_asia": "https://travelfree.info/tag/asia/feed/",
+    "pepper_loty": "https://www.pepper.pl/rss/grupa/bilety-lotnicze",
 }
+# «Заметное вне интереса» (владелец 17.09.2026: «видеть, что происходит», а не только свой интерес):
+# записи этих лент с ценой в заголовке идут в свод и без совпадения с термами интереса — под словом
+# перевозчика/региона, которым помечает сама лента. Слово — в route журнала (`WAW-qatar`) и в таблице.
+NOTABLE = {
+    "f4f_qatar": "qatar", "f4f_emirates": "emirates", "f4f_etihad": "etihad", "f4f_turkish": "turkish",
+    "f4f_finnair": "finnair", "f4f_klm": "klm", "f4f_airfrance": "air france", "f4f_lufthansa": "lufthansa",
+    "f4f_lot": "lot", "f4f_wizz": "wizz", "f4f_ryanair": "ryanair", "f4f_singapore": "singapore airlines",
+    "f4f_airchina": "air china", "f4f_korean": "korean air", "f4f_chinaairlines": "china airlines",
+    "f4f_eva": "eva air", "f4f_cathay": "cathay", "f4f_azja": "azja", "f4f_tajlandia": "tajlandia",
+    "f4f_wietnam": "wietnam", "f4f_japonia": "japonia", "f4f_wyprzedaz": "wyprzedaż",
+    "fly4free_com_asia": "asia", "travelfree_pl": "poland", "travelfree_asia": "asia", "pepper_loty": "loty",
+}
+NOTABLE_PER_DAY = 5      # новых «заметных» за один сбор — самые свежие
+NOTABLE_IN_DIGEST = 12   # строк блока «заметное» в своде — самые свежие из накопленного за неделю
+# Флэш-распродажа перевозчика живёт сутки-двое (Szalona Środa LOT — 24 часа) и до понедельника не доживает:
+# такие записи «заметных» лент печатаются в день сбора (слово владельца 17.09.2026: «короткие сообщения
+# иногда — они же уходят»). Признак — слово о распродаже в заголовке.
+FLASH_WORDS = ("wyprzedaż", "wyprzedaz", "szalona środa", "szalona sroda", "flash", "sale", "kod rabat",
+               "kod promo", "zniżk", "znizk", "% taniej", "распродаж", "скидк", "промокод", "promocj")
+FLASH_PER_DAY = 3
+FLIGHTS_CATEGORY = "loty"   # рубрика fly4free.pl у записей о перелётах; у пакетов её нет
 # вылет из Польши словами — по-польски, по-русски (Вандроўкі) и по-английски (fly4free.com, holidaypirates)
 POLAND_WORDS = ("z warszawy", "warszaw", "z krakowa", "krakow", "kraków", "gdańsk", "gdansk", "katowic",
                 "wrocław", "wroclaw", "poznań", "poznan", "z polski", "polska", "из польши", "из варшавы",
@@ -121,7 +181,8 @@ def parse_feed(xml_text):
         cats = [c.text or "" for c in it.findall("category")]
         desc = html.unescape(re.sub(r"<[^>]+>", " ", it.findtext("description") or ""))
         out.append({"title": html.unescape(title), "link": link.strip(), "published": published,
-                    "text": " ".join([title, *cats, desc]).lower()})
+                    "text": " ".join([title, *cats, desc]).lower(),
+                    "cats": [c.strip().lower() for c in cats]})
     return out
 
 
@@ -273,17 +334,9 @@ def scan(run, feed_ids, terms, since, origin, from_poland, seen_links, max_pln=N
     """Читает ленты (с кэшем на процесс). Возвращает (строки журнала, строки наводок, сводка по лентам,
     показанные ссылки, прочитано лент)."""
     rows, shown, leads, summary, read = [], [], [], [], 0
+    seen_links = set(seen_links)   # одна статья fly4free.pl лежит в общей ленте и в лентах тегов — показать раз
     for feed_id in feed_ids:
-        if feed_id not in FEEDS:
-            print(f"лента неизвестна: {feed_id} (есть: {', '.join(FEEDS)})", file=sys.stderr)
-            continue
-        if feed_id not in _CACHE:
-            try:
-                _CACHE[feed_id] = read_feed(feed_id)
-            except Exception as exc:  # noqa: BLE001 — лента недоступна, остальные читаем
-                print(f"[{feed_id}] не прочитана: {exc}", file=sys.stderr)
-                _CACHE[feed_id] = None
-        items = _CACHE[feed_id]
+        items = cached_feed(feed_id)
         if items is None:
             continue
         read += 1
@@ -291,11 +344,114 @@ def scan(run, feed_ids, terms, since, origin, from_poland, seen_links, max_pln=N
         if max_pln is not None:  # выше потолка — не показана, значит и не «показанная»
             matches = [(it, hit) for it, hit in matches if not above_ceiling(it, max_pln)]
         shown.extend(it["link"] for it, _ in matches)
+        seen_links.update(it["link"] for it, _ in matches)
         feed_rows, seen = rows_for_matches(run, feed_id, matches, origin)
         summary.append(f"[{feed_id}] записей {len(items)}, совпадений {len(seen)}")
         leads.extend("  " + line for line in seen)
         rows.extend(feed_rows)
     return rows, leads, summary, shown, read
+
+
+def cached_feed(feed_id):
+    """Записи ленты с кэшем на процесс; неизвестная или недоступная лента — None и строка в stderr."""
+    if feed_id not in FEEDS:
+        print(f"лента неизвестна: {feed_id} (есть: {', '.join(FEEDS)})", file=sys.stderr)
+        return None
+    if feed_id not in _CACHE:
+        try:
+            _CACHE[feed_id] = read_feed(feed_id)
+        except Exception as exc:  # noqa: BLE001 — лента недоступна, остальные читаем
+            print(f"[{feed_id}] не прочитана: {exc}", file=sys.stderr)
+            _CACHE[feed_id] = None
+    return _CACHE[feed_id]
+
+
+def scan_notable(run, feed_ids, since, origin, seen_links, interest_terms=()):
+    """Записи «заметных» лент с ценой в заголовке, не показанные раньше, без совпадения с интересом:
+    флэш (слово о распродаже в заголовке) — до FLASH_PER_DAY, остальные — до NOTABLE_PER_DAY, свежие
+    первыми. Запись со словом действующего интереса — его, даже если интерес её отсёк (потолок цены,
+    вылет не из Польши): в «заметное» она не идёт (ревью 17.09.2026).
+    Возвращает ((строки журнала, строки текста) флэша, то же для заметного, показанные ссылки)."""
+    found, seen_links = [], set(seen_links)
+    interest_terms = [t.strip().lower() for t in interest_terms if t.strip()]
+    for feed_id in feed_ids:
+        if feed_id not in NOTABLE:
+            continue
+        items = cached_feed(feed_id)
+        if items is None:
+            continue
+        for it in items:
+            if it["link"] in seen_links or (since and it["published"] and it["published"] < since):
+                continue
+            if price_of(it)[0] is None or not it["published"] or term_hits(it["text"], interest_terms):
+                continue
+            # fly4free.pl метит перелёты рубрикой «Loty», пакеты «loty i hotel» — «Wczasy»/«pakiety» без неё
+            # (живой прогон 17.09.2026: 3 из 5 «заметных» были пакетами)
+            if feed_id.startswith("f4f_") and FLIGHTS_CATEGORY not in it.get("cats", []):
+                continue
+            seen_links.add(it["link"])
+            found.append((feed_id, it))
+    found.sort(key=lambda p: p[1]["published"], reverse=True)
+    flash = [p for p in found if term_hits(p[1]["title"].lower(), FLASH_WORDS)][:FLASH_PER_DAY]
+    rest = [p for p in found if p not in flash][:NOTABLE_PER_DAY]
+    result, shown = [], []
+    for group in (flash, rest):
+        rows, lines = [], []
+        for feed_id, it in group:
+            feed_rows, notes = rows_for_matches(run, feed_id, [(it, [NOTABLE[feed_id]])], origin)
+            rows.extend(feed_rows)
+            lines.extend("  " + n for n in notes)
+            shown.append(it["link"])
+        result.append((rows, lines))
+    return result[0], result[1], shown
+
+
+FLASH_HEAD = "## ⚡ распродажа сегодня (до понедельника не доживёт)"
+NOTABLE_HEAD = "## заметное вне интереса"
+
+
+def merge_notable(digest):
+    """Блоки «заметное» за несколько дней копилки — в один, в конце свода, не длиннее NOTABLE_IN_DIGEST
+    строк, свежие первыми (строка начинается с `  [лента] ГГГГ-ММ-ДД`)."""
+    blocks, notable = [], []
+    for line in digest.splitlines():
+        if line.startswith("## ") or not blocks:
+            blocks.append([line, []] if line.startswith("## ") else [None, [line]])
+        else:
+            blocks[-1][1].append(line)
+    rest = []
+    for head, lines in blocks:
+        (notable.extend(l for l in lines if l.strip()) if head == NOTABLE_HEAD else rest.append((head, lines)))
+    if not notable:
+        return digest
+    notable = sorted(dict.fromkeys(notable), key=lambda l: l.split()[1] if len(l.split()) > 1 else "", reverse=True)
+    text = "\n".join(line for head, lines in rest for line in ([head] if head else []) + lines).rstrip("\n")
+    return (text + "\n\n" if text else "") + "\n".join([NOTABLE_HEAD, *notable[:NOTABLE_IN_DIGEST]]) + "\n"
+
+
+def push_sheet(pairs, args):
+    """Новые наводки — в Google Sheet «Распродажи» через `sales_sheet.py` питоном Hermes (токен агента).
+    Таблица — витрина, журнал первичен: нет питона Hermes, Google или сети — строка в stderr, свод не страдает.
+    Возвращает ссылку на таблицу или None."""
+    if not pairs or args.no_sheet or args.dry_run:
+        return None
+    python = os.environ.get("HERMES_PYTHON") or "/opt/hermes/.venv/bin/python3"
+    if not os.path.exists(python):
+        print(f"таблица распродаж не обновлена: нет {python}", file=sys.stderr)
+        return None
+    payload = [dict(block=block, **row) for block, row in pairs]
+    try:
+        proc = subprocess.run([python, os.path.join(os.path.dirname(os.path.abspath(__file__)), "sales_sheet.py")],
+                              input=json.dumps(payload, ensure_ascii=False), capture_output=True, text=True,
+                              encoding="utf-8", timeout=120)
+        if proc.returncode:
+            raise RuntimeError((proc.stderr or proc.stdout).strip()[-200:])
+        answer = json.loads(proc.stdout.strip().splitlines()[-1])
+        print(f"таблица распродаж: +{answer['appended']} строк → {answer['url']}", file=sys.stderr)
+        return answer["url"]
+    except Exception as exc:  # noqa: BLE001 — витрина не должна глушить свод
+        print(f"таблица распродаж не обновлена ({type(exc).__name__}: {str(exc)[:160]})", file=sys.stderr)
+        return None
 
 
 _CACHE = {}
@@ -332,6 +488,7 @@ def main():
     ap.add_argument("--seen", help="файл уже показанных ссылок: пропустить и дописать новые")
     ap.add_argument("--pending", help="режим интереса: копить наводки здесь, печатать сводом раз в неделю")
     ap.add_argument("--digest-weekday", type=int, default=1, help="день свода по ISO (1 — понедельник)")
+    ap.add_argument("--no-sheet", action="store_true", help="режим интереса: не писать наводки в Google Sheet")
     journal.add_common_args(ap)
     args = ap.parse_args()
     if not args.match and not args.interest:
@@ -346,13 +503,14 @@ def main():
 
     if args.interest:
         interests = load_interests(args.interest, today)
-        rows, shown, read, out = [], [], 0, []
+        rows, shown, read, out, sheet = [], [], 0, [], []
         for cfg in interests:
             i_rows, leads, summary, i_shown, i_read = scan(
                 run, feed_ids, cfg["terms"], since, cfg.get("from", args.origin),
                 cfg.get("from_poland", True), seen_links | set(shown), cfg.get("max_pln"))
             read = max(read, i_read)
             rows.extend(i_rows)
+            sheet.extend((f"интерес {cfg['name']}", r) for r in i_rows)
             shown.extend(i_shown)
             if leads:
                 head = f"## интерес {cfg['name']}: {','.join(cfg['terms'])}"
@@ -362,22 +520,39 @@ def main():
                 out.extend([head, *leads, ""])
             print("\n".join(summary), file=sys.stderr)
         if not interests:
-            print("действующих интересов нет — тишина", file=sys.stderr)
+            print("действующих интересов нет — только заметное и флэш", file=sys.stderr)
+        (f_rows, flash), (n_rows, notable), n_shown = scan_notable(
+            run, feed_ids, since, args.origin, seen_links | set(shown), [t for c in interests for t in c["terms"]])
+        read = max(read, sum(1 for f in feed_ids if _CACHE.get(f) is not None))
+        rows.extend(f_rows + n_rows)
+        shown.extend(n_shown)
+        sheet.extend([("флэш", r) for r in f_rows] + [("заметное", r) for r in n_rows])
+        if notable:
+            out.extend([NOTABLE_HEAD, *notable, ""])
         digest = "\n".join(out)
         digest_day = date.today().isoweekday() == args.digest_weekday
         if args.pending:
             digest = pending_digest(args.pending, digest, digest_day, args.dry_run, interest_names(args.interest))
+        if digest_day or not args.pending:
+            digest = merge_notable(digest)
         # ревью 16.09.2026: stderr при коде 0 cron отбрасывает — о файле без слова владельца агент и владелец
         # узнают раз в неделю строкой в своде (истёкший файл — штатно, о нём молчим)
         if _DRAFTS and (digest_day or not args.pending):
             digest += (f"интересы без слова владельца, не действуют: {', '.join(sorted(_DRAFTS))} — "
                        "спроси владельца и запиши ответ в `owner_said` или удали файл\n")
+        # флэш — в день сбора, мимо копилки: до понедельника распродажа не доживёт
+        if flash:
+            digest = "\n".join([FLASH_HEAD, *flash, ""]) + digest
+        url = push_sheet(sheet, args)
+        if url and digest and (digest_day or not args.pending):
+            digest += f"таблица распродаж: {url}\n"
         print(digest, end="")
         with contextlib.redirect_stdout(sys.stderr):
             _save_seen(args, shown)
-            if interests:
+            if interests or rows:
                 journal.finish(args, run, rows)
-        return 0 if not interests or read else _no_feeds()
+        wanted = bool(interests) or any(f in NOTABLE for f in feed_ids)
+        return 0 if read or not wanted else _no_feeds()
     rows, leads, summary, shown, read = scan(run, feed_ids, split_terms(args.match), since, args.origin,
                                              args.from_poland, seen_links)
     print("\n".join(summary + leads))
@@ -410,11 +585,14 @@ def pending_digest(path, fresh, digest_day, dry_run, active_names=None):
 
 
 def _only_active_blocks(text, active_names):
-    """Блоки копилки начинаются строкой `## интерес <имя>: …`; остаются блоки действующих интересов."""
+    """Блоки копилки начинаются строкой `## интерес <имя>: …`; остаются блоки действующих интересов
+    и блоки «заметное» (они ничьи)."""
     out, keep = [], False
     for line in text.splitlines(keepends=True):
         if line.startswith("## интерес "):
             keep = line[len("## интерес "):].split(":", 1)[0] in active_names
+        elif line.startswith("## "):
+            keep = line.rstrip("\n") == NOTABLE_HEAD
         if keep:
             out.append(line)
     return "".join(out)
