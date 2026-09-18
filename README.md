@@ -54,6 +54,9 @@ fare-finder перевозчика (Ryanair) → Google Flights (все пере
   блок «заметное вне интереса» из лент fly4free.pl по перевозчикам и регионам, а флэш-распродажи
   (Szalona Środa и подобные) приходят в день сбора. Каждая наводка ложится в Google Sheet
   «Распродажи» в папке «Поездки», если у агента есть Google. Интерес гаснет сам по дате `until`.
+* **Рассылки перевозчиков** — человек подписан на письма авиакомпаний, у агента есть Gmail: cron
+  `mail_sales.sh` (каждый час, без ИИ) уводит их под ярлык `avia-sale` мимо Входящих; про акции из
+  писем человек спрашивает агента, тот читает ярлык.
 
 Подробности — `skills/travel/travel-role/references/watch.md`; что умеет каждый источник и чем
 заменить упавший — `references/sources.md`; формат строки журнала — `references/journal-contract.md`.
@@ -61,11 +64,12 @@ fare-finder перевозчика (Ryanair) → Google Flights (все пере
 ## Что внутри
 
 ```
-install.sh                      установка: роль, venv (uv), каталоги, cron-обёртка
+install.sh                      установка: роль, venv (uv), каталоги, cron-обёртки
 INSTALL.md                      шаги для агента: команда, три вопроса, профиль, проверка
 requirements.txt                mcp, fast-flights, flywizz, ryanair-py, requests (версии сняты с рабочего агента)
 skills/travel/travel-role/      SKILL.md, profile.yaml, references/, scripts/
 scripts/travel/interest_digest.sh  обёртка cron для свода по интересам
+scripts/travel/mail_sales.sh    обёртка cron для писем перевозчиков (нужен Gmail)
 ```
 
 Профиль (`profile.yaml`) — Варшава: Шопен (ZTM 4,40 zł), Модлин (автобус, ориентир 35 zł, живая
@@ -79,4 +83,5 @@ scripts/travel/interest_digest.sh  обёртка cron для свода по и
   минимумов Wizz, ссылку на покупку даёт на wizzair.com.
 * Google Flights через fast-flights без браузера хрупок: упал — роль скажет об этом в ❌, а не
   «рейсов нет».
-* Почтовые рассылки (Going, Jack's Flight Club) и календари перевозчиков не подключены.
+* Письма перевозчиков только убираются под ярлык — цены из них в свод не вынимаются; рассылки
+  охотников (Going, Jack's Flight Club) и календари перевозчиков не подключены.

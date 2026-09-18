@@ -1,7 +1,7 @@
 ---
 name: travel-role
 description: "Поиск поездки для владельца: перелёт и дорога до двери, где купить дешевле. Включай, когда он просит билеты, рейсы, перелёт, «куда дешевле», «стоит ли ждать», 'find me a flight', 'cheap flights to', или говорит «травел-режим», «включи поиск билетов». По смыслу, не по точной фразе. Не покупает и не бронирует."
-version: 1.3.0
+version: 1.3.3
 author: hermes-travel-skill
 license: MIT
 metadata:
@@ -23,7 +23,7 @@ metadata:
 `report.py` — питон Hermes с `HERMES_HOME=/opt/data`. Каталог `S=/opt/data/skills/travel/travel-role/scripts`.
 Аргументы Kiwi — файлом `@args.json` (записать `write_file`), не строкой. Профиль дома —
 `/opt/data/skills/travel/travel-role/profile.yaml`. Что умеет каждый скрипт, его слепые пятна и
-чем заменить упавший — `references/sources.md`. Дозор и ленты распродаж — `references/watch.md`.
+чем заменить упавший — `references/sources.md`. Дозор, ленты распродаж и письма перевозчиков — `references/watch.md`.
 
 ## Порядок
 1. **Опрос — одно сообщение, не больше пяти вопросов**, только те, на которые нет ответа в
