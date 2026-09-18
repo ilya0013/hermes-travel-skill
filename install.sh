@@ -4,7 +4,7 @@
 #   git clone <url> /tmp/hermes-travel-skill && bash /tmp/hermes-travel-skill/install.sh [--check]
 #
 # Ставит: skills/travel/travel-role (роль), travel/lib/venv (venv источников через uv),
-# каталоги travel/{reports,interest,watch}, обёртку scripts/travel/interest_digest.sh для cron.
+# каталоги travel/{reports,interest,watch}, обёртки scripts/travel/{interest_digest,mail_sales}.sh для cron.
 # Повторный запуск безопасен: роль перезаписывается, profile.yaml и журнал не трогаются.
 # --check — живой вызов Kiwi (без ключа) на пробные даты, строки в журнал не пишутся.
 # Ключи не нужны: Kiwi MCP, Ryanair, Google Flights (fast-flights), AZair, Flixbus и ленты — без них.
@@ -58,8 +58,11 @@ echo "venv: $($UV pip list --python "$PY" 2>/dev/null | grep -Ei '^(mcp|fast-fli
 # 3. каталоги данных и обёртка cron
 mkdir -p "$H/travel/reports" "$H/travel/interest" "$H/travel/watch" "$H/scripts/travel"
 touch "$H/travel/observations.jsonl"
-sed "s|@HERMES_HOME@|$H|g" "$SRC/scripts/travel/interest_digest.sh" > "$H/scripts/travel/interest_digest.sh"
-chmod +x "$H/scripts/travel/interest_digest.sh" "$ROLE"/scripts/*.py
+for w in interest_digest mail_sales; do
+  sed "s|@HERMES_HOME@|$H|g" "$SRC/scripts/travel/$w.sh" > "$H/scripts/travel/$w.sh"
+  chmod +x "$H/scripts/travel/$w.sh"
+done
+chmod +x "$ROLE"/scripts/*.py
 
 # 4. проверка: скрипты запускаются, роль видна Hermes
 "$PY" "$ROLE/scripts/kiwi_search.py" --help >/dev/null
@@ -89,5 +92,6 @@ cat <<EOF
   venv      $VENV
   журнал    $H/travel/observations.jsonl, отчёты $H/travel/reports/
   интерес   $H/travel/interest/  + cron-обёртка $H/scripts/travel/interest_digest.sh
+  письма    cron-обёртка $H/scripts/travel/mail_sales.sh (рассылки перевозчиков → ярлык avia-sale; нужен Gmail)
 дальше — INSTALL.md: вопросы человеку и profile.yaml.
 EOF

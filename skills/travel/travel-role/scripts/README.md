@@ -8,6 +8,8 @@
 `/opt/data/travel/lib/venv`, не Python Hermes. Их модульные тесты — `tests/test_travel_scripts.py`
 в репозитории. Витрина наводок `sales_sheet.py` (Google Sheet «Распродажи» в «Поездках») — исключение:
 её зовёт `deal_feeds.py` питоном Hermes, потому что ходит токеном агента, как `drive_report.py`.
+Так же питоном Hermes идёт `mail_sales.py` — письма перевозчиков в Gmail под ярлык `avia-sale`
+мимо Входящих (cron каждый час, обёртка `/opt/data/scripts/travel/mail_sales.sh`).
 
 ## Отчёт для человека: report_render и drive_report
 

@@ -19,7 +19,7 @@ rm -rf /tmp/hermes-travel-skill && git clone https://github.com/ilya0013/hermes-
 
 `HERMES_HOME` у тебя — обычно `/opt/data` (образ Hostinger); другой — добавь `--home=<путь>`.
 Скрипт ставит роль, venv источников (`travel/lib/venv`, через `uv`), каталоги
-`travel/{reports,interest,watch}` и cron-обёртку `scripts/travel/interest_digest.sh`.
+`travel/{reports,interest,watch}` и cron-обёртки `scripts/travel/{interest_digest,mail_sales}.sh`.
 Повторный запуск безопасен: `profile.yaml` и журнал остаются.
 
 **Успех — пять строк в выводе:** `роль установлена…`, `venv: fast-flights 3.1.0;flywizz 0.1.0;mcp 2.2.0;…`,
@@ -50,6 +50,11 @@ rm -rf /tmp/hermes-travel-skill && git clone https://github.com/ilya0013/hermes-
 `report.py` кладёт таблицу всех найденных строк в Google Doc через скилл `google-workspace`.
 Нет токена Google — таблица остаётся файлом `travel/reports/<run>.md`, ответ человеку всё равно
 приходит целиком. Настраивать Google не обязательно; захочет — `hermes auth` по документации Hermes.
+
+Есть Gmail в токене и человек подписан на рассылки авиакомпаний (спроси) — заведи cron по
+`references/watch.md`, раздел «Рассылки перевозчиков»: `cronjob create` с `script:
+travel/mail_sales.sh`, каждый час, `no_agent: true`, доставка `local`. Письма перевозчиков уйдут
+под ярлык `avia-sale` мимо Входящих; про акции из них человек спросит тебя сам.
 
 ## 4. Проверка живьём
 

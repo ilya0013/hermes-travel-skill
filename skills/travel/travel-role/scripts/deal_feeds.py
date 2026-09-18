@@ -119,7 +119,10 @@ NOTABLE = {
     "fly4free_com_asia": "asia", "travelfree_pl": "poland", "travelfree_asia": "asia", "pepper_loty": "loty",
 }
 NOTABLE_PER_DAY = 5      # новых «заметных» за один сбор — самые свежие
-NOTABLE_IN_DIGEST = 12   # строк блока «заметное» в своде — самые свежие из накопленного за неделю
+NOTABLE_IN_DIGEST = 6    # строк блока «заметное» в своде — самые свежие из накопленного за неделю
+                         # (было 12; экран телефона — слово владельца 18.09.2026)
+INTEREST_IN_DIGEST = 5   # строк блока интереса в своде — свежие первыми (обещание владельцу 18.09.2026)
+TITLE_CHARS = 70         # знаков заголовка поста в строке свода для телефона
 # Флэш-распродажа перевозчика живёт сутки-двое (Szalona Środa LOT — 24 часа) и до понедельника не доживает:
 # такие записи «заметных» лент печатаются в день сбора (слово владельца 17.09.2026: «короткие сообщения
 # иногда — они же уходят»). Признак — слово о распродаже в заголовке.
@@ -143,17 +146,21 @@ CURRENCY = {"pln": "PLN", "zł": "PLN", "zl": "PLN", "złotych": "PLN", "eur": "
             "евро": "EUR", "злотых": "PLN", "злотые": "PLN", "злотый": "PLN", "зл": "PLN"}
 
 
-def parse_price(title):
-    """(значение, валюта) из заголовка или (None, None); из нескольких цен — первая в PLN, иначе первая."""
+def pick_price(title):
+    """(значение, валюта, текст как в заголовке) или None; из нескольких цен — первая в PLN, иначе первая."""
     found = []
     for m in PRICE_RE.finditer(title or ""):
         num = m.group(1) or m.group(4)
         cur = m.group(2) or m.group(3)
         value = float(num.replace("\u00a0", "").replace(" ", "").replace(",", "."))
-        found.append((value, CURRENCY[cur.lower()]))
-    if not found:
-        return None, None
-    return next((f for f in found if f[1] == "PLN"), found[0])
+        found.append((value, CURRENCY[cur.lower()], m.group(0)))
+    return next((f for f in found if f[1] == "PLN"), found[0] if found else None)
+
+
+def parse_price(title):
+    """(значение, валюта) из заголовка или (None, None)."""
+    found = pick_price(title)
+    return (found[0], found[1]) if found else (None, None)
 
 
 def parse_feed(xml_text):
@@ -411,22 +418,65 @@ NOTABLE_HEAD = "## заметное вне интереса"
 
 
 def merge_notable(digest):
-    """Блоки «заметное» за несколько дней копилки — в один, в конце свода, не длиннее NOTABLE_IN_DIGEST
-    строк, свежие первыми (строка начинается с `  [лента] ГГГГ-ММ-ДД`)."""
-    blocks, notable = [], []
+    """Блоки копилки за несколько дней — по одному на заголовок: блок интереса не длиннее
+    INTEREST_IN_DIGEST строк, «заметное» — NOTABLE_IN_DIGEST и в конце свода; повторы убраны, свежие
+    первыми (строка начинается с `  [лента] ГГГГ-ММ-ДД`). Строки до первого заголовка — как есть."""
+    blocks, titles, head = {}, {}, None
     for line in digest.splitlines():
-        if line.startswith("## ") or not blocks:
-            blocks.append([line, []] if line.startswith("## ") else [None, [line]])
-        else:
-            blocks[-1][1].append(line)
-    rest = []
-    for head, lines in blocks:
-        (notable.extend(l for l in lines if l.strip()) if head == NOTABLE_HEAD else rest.append((head, lines)))
-    if not notable:
+        if line.startswith("## "):
+            # блок интереса узнаётся по имени: заголовок за неделю мог смениться (срок, потолок, цитата
+            # владельца появилась 16.09.2026) — печатается свежий, то есть последний
+            head = line.split(":", 1)[0] if line.startswith("## интерес ") else line
+            titles[head] = line
+            blocks[head] = blocks.get(head, [])
+        elif line.strip():
+            blocks.setdefault(head, []).append(line)
+    if not titles:
         return digest
-    notable = sorted(dict.fromkeys(notable), key=lambda l: l.split()[1] if len(l.split()) > 1 else "", reverse=True)
-    text = "\n".join(line for head, lines in rest for line in ([head] if head else []) + lines).rstrip("\n")
-    return (text + "\n\n" if text else "") + "\n".join([NOTABLE_HEAD, *notable[:NOTABLE_IN_DIGEST]]) + "\n"
+    fresh_first = lambda lines: sorted(dict.fromkeys(lines), key=lambda l: l.split()[1] if len(l.split()) > 1 else "",
+                                       reverse=True)
+    parts = ["\n".join(blocks[None])] if blocks.get(None) else []
+    for h, title in titles.items():
+        if h != NOTABLE_HEAD:
+            lines = fresh_first(blocks[h])[:INTEREST_IN_DIGEST] if h.startswith("## интерес ") else blocks[h]
+            parts.append("\n".join([title, *lines]))
+    if blocks.get(NOTABLE_HEAD):
+        parts.append("\n".join([NOTABLE_HEAD, *fresh_first(blocks[NOTABLE_HEAD])[:NOTABLE_IN_DIGEST]]))
+    return "\n\n".join(parts) + "\n"
+
+
+LEAD_RE = re.compile(r"^\s*\[[^\]]+\] (?P<date>\S{10}) (?P<rest>.*) → (?P<link>\S+)")
+HEAD_RE = re.compile(r"^## интерес (?P<name>[^:]+):.*?(?:, до (?P<until>\d{4}-\d{2}-\d{2}))?(?:, потолок (?P<max>[^—]+?))?(?: — по слову|$)")
+
+
+def compact(digest):
+    """Свод для телефона (Telegram, задание без агента с 18.09.2026, слово владельца: «главное, чтобы
+    компактно на мобильном»): наводка — `дд.мм · цена как в заголовке · заголовок до TITLE_CHARS знаков ·
+    [пост](ссылка)`; заголовок интереса — без списка слов и цитаты владельца; ссылка на таблицу — словом.
+    Копилка и журнал хранят полную строку, ужимается только печать; `## ` Telegram-доставка Hermes рисует
+    жирным, `[текст](url)` — ссылкой (adapter.py, проверено 18.09.2026)."""
+    out = []
+    for line in digest.splitlines():
+        lead, head = LEAD_RE.match(line), HEAD_RE.match(line)
+        if lead:
+            title = lead["rest"].rsplit(" — ", 1)[0]
+            price = pick_price(title)
+            if len(title) > TITLE_CHARS:
+                title = title[:TITLE_CHARS - 1].rstrip() + "…"
+            d = lead["date"]
+            parts = [f"{d[8:]}.{d[5:7]}"] + ([price[2]] if price else []) + [title, f"[пост]({lead['link']})"]
+            out.append("• " + " · ".join(parts))
+        elif head:
+            tail = [f"до {head['until'][8:]}.{head['until'][5:7]}"] if head["until"] else []
+            tail += [f"потолок {head['max'].strip()}"] if head["max"] else []
+            out.append(f"## интерес {head['name'].strip()}" + (" — " + ", ".join(tail) if tail else ""))
+        elif line == FLASH_HEAD:
+            out.append("## ⚡ распродажа сегодня")
+        elif line.startswith("таблица распродаж: "):
+            out.append(f"[таблица распродаж]({line[len('таблица распродаж: '):]})")
+        else:
+            out.append(line)
+    return "\n".join(out) + ("\n" if digest.endswith("\n") else "")
 
 
 def push_sheet(pairs, args):
@@ -546,7 +596,7 @@ def main():
         url = push_sheet(sheet, args)
         if url and digest and (digest_day or not args.pending):
             digest += f"таблица распродаж: {url}\n"
-        print(digest, end="")
+        print(compact(digest), end="")
         with contextlib.redirect_stdout(sys.stderr):
             _save_seen(args, shown)
             if interests or rows:
@@ -579,8 +629,10 @@ def pending_digest(path, fresh, digest_day, dry_run, active_names=None):
     if dry_run:
         return kept + fresh if digest_day else ""
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    with open(path, "w" if digest_day else "a", encoding="utf-8") as fh:
-        fh.write("" if digest_day else fresh)
+    # файл переписывается уже отфильтрованным и в обычный день: блок снятого интереса, лежащий в копилке
+    # до свода, агент прочёл сам и дописал «по интересу пусто» (cron 18.09.2026)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("" if digest_day else kept + fresh)
     return kept + fresh if digest_day else ""
 
 
