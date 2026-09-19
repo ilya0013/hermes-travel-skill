@@ -446,9 +446,12 @@ def build(args, rows, profile):
     for r in rows + new_rows:
         if r.get("kind") == "rate":
             out.append(f"курс {r.get('route')}: {r.get('value')} ({r.get('raw')})")
-    src = "источники: ✅ " + (", ".join(ok) or "—")
-    if failures:
-        src += " · ❌ " + ", ".join(f"{k} ({v})" for k, v in failures.items())
+    # источник со строками в прогоне ответил — в ❌ ему не место, его причина из --failed — пометка частичного сбоя
+    # (эвал 19.09.2026: travelpayouts_api стоял и в ✅, и в ❌ одной строкой)
+    src = "источники: ✅ " + (", ".join(f"{k} (частично: {failures[k]})" if k in failures else k for k in ok) or "—")
+    down = {k: v for k, v in failures.items() if k not in ok}
+    if down:
+        src += " · ❌ " + ", ".join(f"{k} ({v})" for k, v in down.items())
     out.append(src)
     return out, results, new_rows
 
