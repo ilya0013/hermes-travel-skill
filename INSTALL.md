@@ -18,7 +18,8 @@ rm -rf /tmp/hermes-travel-skill && git clone https://github.com/ilya0013/hermes-
 ```
 
 `HERMES_HOME` у тебя — обычно `/opt/data` (образ Hostinger); другой — добавь `--home=<путь>`.
-Скрипт ставит роль, venv источников (`travel/lib/venv`, через `uv`), каталоги
+Роль объявлена под Linux (`platforms: [linux]` в `SKILL.md`): на macOS и Windows Hermes её не покажет,
+без ошибки. Скрипт ставит роль, venv источников (`travel/lib/venv`, через `uv`), каталоги
 `travel/{reports,interest,watch}` и cron-обёртки `scripts/travel/{interest_digest,mail_sales}.sh`.
 Повторный запуск безопасен: `profile.yaml` и журнал остаются.
 
@@ -66,7 +67,7 @@ travel/mail_sales.sh`, каждый час, `no_agent: true`, доставка `
 ## 5. Если что-то не так
 
 * `hermes skills list` не видит `travel-role` — агент запущен с другим `HERMES_HOME`; поставь
-  с `--home=<его путь>`.
+  с `--home=<его путь>`. Либо агент не на Linux (шаг 1) — тогда роль здесь не заработает.
 * Скрипт источника упал — роль сама переходит к следующему (`references/sources.md`), в ответе
   будет ❌ с причиной. Это норма, не ошибка установки.
 * Обновить роль — та же команда из шага 1: файлы перезапишутся, профиль и журнал останутся.
