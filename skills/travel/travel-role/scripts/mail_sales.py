@@ -35,6 +35,12 @@ SENDERS = {
     "china airlines": ("email.china-airlines.com",),
     "ryanair": ("services.ryanairemails.com",),
     "scoot": ("promotion.flyscoot.com",),    # надзор 19.09.2026: письмо во Входящих
+    # подписки владельца 19.09.2026 — только адреса РАССЫЛОК: с тех же доменов ходят коды входа, активация
+    # аккаунта и «подтвердите подписку» (csair.com OTP, flypgs.com BolBol, Travel ID Lufthansa/Austrian) — их из
+    # Входящих убирать нельзя. Домен один на рассылку и аккаунт (TAP) — запись полным адресом.
+    "eurowings": ("news.eurowings.com",),
+    "sky express": ("campaigns.skyexpress.com",),
+    "tap": ("promo@tapmilesandgo.com",),
 }
 
 
@@ -44,10 +50,11 @@ def query(days, label):
 
 
 def carrier_of(from_header):
-    """Слово перевозчика по домену адреса `From:`; чужой домен — сам домен."""
-    domain = from_header.rsplit("@", 1)[-1].rstrip(">").strip().lower()
+    """Слово перевозчика по домену (или полному адресу) `From:`; чужой домен — сам домен."""
+    addr = from_header.rsplit("<", 1)[-1].rstrip(">").strip().lower()
+    domain = addr.rsplit("@", 1)[-1]
     for word, doms in SENDERS.items():
-        if any(domain == d or domain.endswith("." + d) for d in doms):
+        if any(addr == d if "@" in d else (domain == d or domain.endswith("." + d)) for d in doms):
             return word
     return domain
 
@@ -85,15 +92,23 @@ def main():
     from google_api import build_service
 
     gmail = build_service("gmail", "v1")
-    ids = list_ids(gmail, query(args.days, args.label))
+    found = list_ids(gmail, query(args.days, args.label))
+    by_carrier, strangers, ids = collections.Counter(), collections.Counter(), []
+    for mid in found:
+        msg = gmail.users().messages().get(userId="me", id=mid, format="metadata", metadataHeaders=["From"]).execute()
+        headers = {h["name"].lower(): h["value"] for h in msg.get("payload", {}).get("headers", [])}
+        word = carrier_of(headers.get("from", ""))
+        if word in SENDERS:                       # поиск Gmail `from:` шире точного домена — убираем только сопоставленное
+            by_carrier[word] += 1
+            ids.append(mid)
+        else:
+            strangers[word] += 1
+    if strangers:
+        print("не тронуты (нашлись по from:, но вне SENDERS): " + ", ".join(f"{d} {n}" for d, n in strangers.most_common()),
+              file=sys.stderr)
     if not ids:
         print("новых писем перевозчиков нет", file=sys.stderr)
         return 0
-    by_carrier = collections.Counter()
-    for mid in ids:
-        msg = gmail.users().messages().get(userId="me", id=mid, format="metadata", metadataHeaders=["From"]).execute()
-        headers = {h["name"].lower(): h["value"] for h in msg.get("payload", {}).get("headers", [])}
-        by_carrier[carrier_of(headers.get("from", ""))] += 1
     summary = ", ".join(f"{word} {n}" for word, n in by_carrier.most_common())
     if args.dry_run:
         print(f"[dry-run] {len(ids)} писем → {args.label}: {summary}", file=sys.stderr)
