@@ -34,6 +34,7 @@ SENDERS = {
     "ana": ("mail.ana.co.jp",),
     "china airlines": ("email.china-airlines.com",),
     "ryanair": ("services.ryanairemails.com",),
+    "scoot": ("promotion.flyscoot.com",),    # надзор 19.09.2026: письмо во Входящих
 }
 
 

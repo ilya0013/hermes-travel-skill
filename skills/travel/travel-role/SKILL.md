@@ -1,9 +1,10 @@
 ---
 name: travel-role
 description: "Поиск поездки для владельца: перелёт и дорога до двери, где купить дешевле. Включай, когда он просит билеты, рейсы, перелёт, «куда дешевле», «стоит ли ждать», 'find me a flight', 'cheap flights to', или говорит «травел-режим», «включи поиск билетов». По смыслу, не по точной фразе. Не покупает и не бронирует."
-version: 1.3.3
+version: 1.3.6
 author: hermes-travel-skill
 license: MIT
+platforms: [linux]
 metadata:
   hermes:
     tags: [travel, flights, kiwi, ryanair, wizz]
@@ -20,10 +21,9 @@ metadata:
 
 ## Как запускать
 Все команды — через `terminal`. Скрипты источников — venv `/opt/data/travel/lib/venv/bin/python`,
-`report.py` — питон Hermes с `HERMES_HOME=/opt/data`. Каталог `S=/opt/data/skills/travel/travel-role/scripts`.
-Аргументы Kiwi — файлом `@args.json` (записать `write_file`), не строкой. Профиль дома —
-`/opt/data/skills/travel/travel-role/profile.yaml`. Что умеет каждый скрипт, его слепые пятна и
-чем заменить упавший — `references/sources.md`. Дозор, ленты распродаж и письма перевозчиков — `references/watch.md`.
+`report.py` — питон Hermes с `HERMES_HOME=/opt/data`. Каталог `S=/opt/data/skills/travel/travel-role/scripts`,
+профиль дома — `/opt/data/skills/travel/travel-role/profile.yaml`. Аргументы Kiwi — файлом `@args.json`
+(записать `write_file`), не строкой. Скрипты, их слепые пятна и замены — `references/sources.md`; дозор, ленты, письма — `references/watch.md`.
 
 ## Порядок
 1. **Опрос — одно сообщение, не больше пяти вопросов**, только те, на которые нет ответа в
@@ -58,7 +58,7 @@ metadata:
    Увиденное число кладёшь строкой
    `journal_add.py --run R --kind fare --source-id web_site --url <страница> --value 89.99 --currency EUR --status QUOTED --raw "<фрагмент как есть>"`.
    Без url и фрагмента строки нет. Капчу и бот-гейт не обходишь — фиксируешь отказ.
-4. **Варианты собирает скрипт, не ты.** `report.py --run R --list` нумерует строки. `--auto --nights 2-3`
+4. **Варианты собирает скрипт, не ты.** `report.py --run R --list` нумерует строки (`--dates д1,д2` — фильтр). `--auto --nights 2-3`
    (из опроса: ночей; `--bags 1` — чемодан; `--home WAW,WMI` — Модлин годится, иначе `--home WAW`)
    перебирает все поездки из строк прогона — одной строкой (Kiwi, Google) и парами плеч (fare-finder,
    Google в одну сторону) с автобусом на даты плеч — и печатает самые дешёвые до двери: `auto-1` — ★.

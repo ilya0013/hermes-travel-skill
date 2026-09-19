@@ -2,7 +2,7 @@
 """Цифры прогона одним вызовом: курс раз, злотые, сумма до двери по вариантам, таблица всех
 строк на Диск. Текст для владельца пишет агент сам — скрипт печатает только факты.
 
-    HERMES_HOME=/opt/data /opt/hermes/.venv/bin/python3 report.py --run R --list
+    HERMES_HOME=/opt/data /opt/hermes/.venv/bin/python3 report.py --run R --list [--dates 2026-10-12,2026-10-14]
     HERMES_HOME=/opt/data /opt/hermes/.venv/bin/python3 report.py --run R \\
         --title "WAW→BUD, октябрь, 2–3 ночи" --variant "A=1+3" --variant "B=2" \\
         [--failed wizzair_api="429 бот-гейт"] [--no-drive]
@@ -492,6 +492,8 @@ def main():
     ap.add_argument("--journal", default=journal.JOURNAL)
     ap.add_argument("--profile", default=str(PROFILE))
     ap.add_argument("--list", action="store_true", help="напечатать строки прогона с номерами")
+    ap.add_argument("--dates", help="для --list: только строки с этими датами через запятую (2026-10-12,2026-10-14); "
+                                    "номера строк те же, что без фильтра")
     ap.add_argument("--title", help="маршрут и окно — имя документа")
     ap.add_argument("--variant", action="append", default=[], help="«A=1+3»: имя и строки через +")
     ap.add_argument("--failed", action="append", help="источник, который не ответил: id=причина")
@@ -508,17 +510,26 @@ def main():
 
     if args.auto and not args.nights:
         sys.exit("--auto без --nights: сколько ночей — из опроса, например --nights 2-3")
+    if args.dates and not args.list:
+        ap.error("--dates только с --list: варианты собирают --auto и --variant по всем строкам")
     rows, broken = run_rows(args.journal, args.run)
     if not rows:
         sys.exit(f"в журнале {args.journal} нет строк прогона {args.run}")
     if args.list:
+        # 15.09.2026: на ~95 строках (два календаря Ryanair) агент написал свой фильтр — даты фильтруют здесь
+        wanted = {d.strip() for d in args.dates.split(",") if d.strip()} if args.dates else set()
+        shown_n = 0
         for i, r in enumerate(rows, 1):
+            if wanted and not wanted & set((r.get("dates") or "").split("/")):
+                continue
+            shown_n += 1
             v = r.get("value")
             shown = f"{v:.2f}" if isinstance(v, (int, float)) else "—"
             print(f"{i:>3} {r.get('kind') or '':10} {r.get('source_id') or '':16} {r.get('route') or '':8} "
                   f"{r.get('dates') or '':21} {shown:>9} {r.get('currency') or '':3} {r.get('status') or '':9} "
                   f"{str(r.get('raw') or '')[:60]}")
-        print(f"прогон {args.run}: {len(rows)} строк" + (f"; битых строк в файле: {broken}" if broken else ""))
+        print(f"прогон {args.run}: {len(rows)} строк" + (f", показано {shown_n} на {', '.join(sorted(wanted))}" if wanted else "")
+              + (f"; битых строк в файле: {broken}" if broken else ""))
         return 0
     if not args.title or not (args.variant or args.auto):
         ap.error("нужны --title и --auto или хотя бы один --variant (или --list)")

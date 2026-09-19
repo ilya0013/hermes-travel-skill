@@ -288,14 +288,29 @@ def interest_names(path):
     return names
 
 
-_DRAFTS = []  # имена файлов без слова владельца из последнего load_interests — строка в своде
+_NOTES = []   # что владелец должен узнать о файлах интереса — строки в своде в день свода (stderr cron
+              # отбрасывает, ревью 16.09.2026): черновики без слова владельца, неразобранные файлы, слова стоп-листа
+# Слова, которые в лентах совпадают не с направлением, — по живому прогону `--match` 19.09.2026
+# (16.09 терм `palma` интереса «Испания» дал Гамбию: «pod palmami»). Слово в интересе — не ошибка
+# файла, а предупреждение: в stderr при загрузке и строкой в своде; точное слово подсказано.
+COMMON_WORDS = {
+    "palma": "«pod palmami», «La Palmie» — точнее: majorka, palma de mallorca",
+    "costa": "отель «Costa Jardin», «Costa Dorada», круиз — точнее: costa brava, costa blanca",
+    "sol": "отель «Sol Dunas» — точнее: costa del sol",
+}
+
+
+def common_word_notes(terms):
+    """Предупреждения по словам из COMMON_WORDS — и для файла интереса, и для `--match` (предпроверка слов)."""
+    keys = [(t, t.strip().lower()) for t in terms]
+    return [f"слово «{t}» совпадает не с направлением ({COMMON_WORDS[k]})" for t, k in keys if k in COMMON_WORDS]
 
 
 def load_interests(path, today):
     """Действующие интересы из файла или каталога *.json; нет пути — нет интересов.
-    Истёкшие и неразобранные файлы — строкой в stderr, остальные работают."""
-    active = []
-    _DRAFTS.clear()
+    Истёкшие — строкой в stderr; неразобранные, черновики и слова стоп-листа — в stderr и в `_NOTES`."""
+    active, drafts = [], []
+    _NOTES.clear()
     for fp in _interest_paths(path):
         name = os.path.splitext(os.path.basename(fp))[0]
         try:
@@ -309,7 +324,9 @@ def load_interests(path, today):
             if cfg.get("max_pln") is not None:
                 cfg["max_pln"] = float(cfg["max_pln"])
         except (OSError, ValueError, KeyError, TypeError) as exc:
-            print(f"интерес {name}: файл не разобран ({exc}) — пропущен", file=sys.stderr)
+            note = f"интерес {name}: файл не разобран ({exc}) — исправь файл или удали его"
+            print(note, file=sys.stderr)
+            _NOTES.append(note)
             continue
         # 14.09.2026 агент завёл интерес «Испания», не спросив владельца (подтверждено 16.09): интерес без
         # дословной фразы владельца не действует — файл не интерес, а черновик
@@ -317,12 +334,18 @@ def load_interests(path, today):
         if not cfg["owner_said"]:
             print(f"интерес {cfg['name']}: нет слова владельца (`owner_said`) — не действует; "
                   "спроси владельца и запиши его ответ дословно или удали файл", file=sys.stderr)
-            _DRAFTS.append(cfg["name"])
+            drafts.append(cfg["name"])
             continue
         if cfg.get("until") and cfg["until"] < today:
             print(f"интерес {cfg['name']}: истёк {cfg['until']}", file=sys.stderr)
             continue
+        for note in common_word_notes(cfg["terms"]):
+            print(f"интерес {cfg['name']}: {note}", file=sys.stderr)
+            _NOTES.append(f"интерес {cfg['name']}: {note}")
         active.append(cfg)
+    if drafts:
+        _NOTES.insert(0, f"интересы без слова владельца, не действуют: {', '.join(sorted(drafts))} — "
+                         "спроси владельца и запиши ответ в `owner_said` или удали файл")
     return active
 
 
@@ -585,11 +608,10 @@ def main():
             digest = pending_digest(args.pending, digest, digest_day, args.dry_run, interest_names(args.interest))
         if digest_day or not args.pending:
             digest = merge_notable(digest)
-        # ревью 16.09.2026: stderr при коде 0 cron отбрасывает — о файле без слова владельца агент и владелец
-        # узнают раз в неделю строкой в своде (истёкший файл — штатно, о нём молчим)
-        if _DRAFTS and (digest_day or not args.pending):
-            digest += (f"интересы без слова владельца, не действуют: {', '.join(sorted(_DRAFTS))} — "
-                       "спроси владельца и запиши ответ в `owner_said` или удали файл\n")
+        # ревью 16.09.2026: stderr при коде 0 cron отбрасывает — о файлах интереса (черновик, не разобран,
+        # слово стоп-листа) агент и владелец узнают раз в неделю строками в своде (истёкший файл — штатно, молчим)
+        if _NOTES and (digest_day or not args.pending):
+            digest += "\n".join(_NOTES) + "\n"
         # флэш — в день сбора, мимо копилки: до понедельника распродажа не доживёт
         if flash:
             digest = "\n".join([FLASH_HEAD, *flash, ""]) + digest
@@ -603,8 +625,10 @@ def main():
                 journal.finish(args, run, rows)
         wanted = bool(interests) or any(f in NOTABLE for f in feed_ids)
         return 0 if read or not wanted else _no_feeds()
-    rows, leads, summary, shown, read = scan(run, feed_ids, split_terms(args.match), since, args.origin,
-                                             args.from_poland, seen_links)
+    terms = split_terms(args.match)
+    for note in common_word_notes(terms):   # предпроверка слов интереса (watch.md) идёт этим режимом
+        print(note, file=sys.stderr)
+    rows, leads, summary, shown, read = scan(run, feed_ids, terms, since, args.origin, args.from_poland, seen_links)
     print("\n".join(summary + leads))
     _save_seen(args, shown)
     journal.finish(args, run, rows)
