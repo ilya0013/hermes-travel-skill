@@ -37,7 +37,8 @@
 регионов fly4free.pl, TravelFree Poland/Asia, Pepper «bilety lotnicze»): их записи с ценой в заголовке
 идут в копилку блоком «## заметное вне интереса» (до NOTABLE_PER_DAY в день, в своде — до NOTABLE_IN_DIGEST
 свежих), а записи со словом о распродаже в заголовке (FLASH_WORDS) — сразу в stdout в день сбора блоком
-«## ⚡ распродажа сегодня»: до понедельника такая акция не доживает (владелец 17.09.2026). Каждая
+«## ⚡ распродажа сегодня»: до понедельника такая акция не доживает (владелец 17.09.2026). Вылет (владелец
+01.10.2026): во «⚡» — только из Польши, в «заметное» — ещё от соседей (NEIGHBOUR_WORDS), остальное мимо. Каждая
 журналируемая наводка дописывается в Google Sheet «Распродажи» (`sales_sheet.py`, питон Hermes, токен
 агента); нет Google — строка в stderr, свод не страдает; `--no-sheet` выключает.
 В журнал идут наводки с ценой в заголовке,
@@ -137,6 +138,11 @@ FLIGHTS_CATEGORY = "loty"   # рубрика fly4free.pl у записей о п
 POLAND_WORDS = ("z warszawy", "warszaw", "z krakowa", "krakow", "kraków", "gdańsk", "gdansk", "katowic",
                 "wrocław", "wroclaw", "poznań", "poznan", "z polski", "polska", "из польши", "из варшавы",
                 "варшав", "краков", "гданьск", "катовиц", "вроцлав", "познан", "warsaw", "poland", "polish")
+# соседи, куда дёшево доехать из Варшавы (владелец 01.10.2026, вопрос 19): их вылеты — в «заметное», не во «⚡»
+NEIGHBOUR_WORDS = ("berlin", "prague", "praha", "z pragi", "vienna", "wiedeń", "wiednia", "budapest", "budapeszt",
+                   "vilnius", "wilno", "z wilna", "берлин", "из праги", "из вены", "будапешт", "вильнюс")
+# ленты с вылетами со всей Европы; остальные «заметные» — польские, вылет из Польши отобрала редакция
+FOREIGN_FEEDS = ("fly4free_com_asia", "travelfree_asia")
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) travel-role deal_feeds"
 
 # «2073 PLN», «299 zł», «1 299,99 zł», «€478», «£52», «478 EUR», «$550», «115 евро», «449 злотых»
@@ -503,11 +509,20 @@ def cached_feed(feed_id):
     return _CACHE[feed_id]
 
 
+def departure(feed_id, it):
+    """Откуда вылет по словам записи: "pl", "near" (сосед из NEIGHBOUR_WORDS) или None — дальше. В польской
+    ленте сосед — обычно куда летят («Budapeszt od 39 zł»), поэтому соседей ищем только в FOREIGN_FEEDS."""
+    if feed_id not in FOREIGN_FEEDS or it.get("from_poland") or any(w in it["text"] for w in POLAND_WORDS):
+        return "pl"
+    return "near" if any(w in it["text"] for w in NEIGHBOUR_WORDS) else None
+
+
 def scan_notable(run, feed_ids, since, origin, seen_links, interest_terms=()):
     """Записи «заметных» лент с ценой в заголовке, не показанные раньше, без совпадения с интересом:
-    флэш (слово о распродаже в заголовке) — до FLASH_PER_DAY, остальные — до NOTABLE_PER_DAY, свежие
-    первыми. Запись со словом действующего интереса — его, даже если интерес её отсёк (потолок цены,
-    вылет не из Польши): в «заметное» она не идёт (ревью 17.09.2026).
+    флэш (слово о распродаже в заголовке, вылет из Польши) — до FLASH_PER_DAY, остальные — до
+    NOTABLE_PER_DAY, свежие первыми; вылет не из Польши и не от соседей — мимо. Запись со словом действующего
+    интереса — его, даже если интерес её отсёк (потолок цены, вылет не из Польши): в «заметное» она не идёт
+    (ревью 17.09.2026).
     Возвращает ((строки журнала, строки текста) флэша, то же для заметного, показанные ссылки)."""
     found, seen_links = [], set(seen_links)
     interest_terms = [t.strip().lower() for t in interest_terms if t.strip()]
@@ -526,15 +541,18 @@ def scan_notable(run, feed_ids, since, origin, seen_links, interest_terms=()):
             # (живой прогон 17.09.2026: 3 из 5 «заметных» были пакетами)
             if feed_id.startswith("f4f_") and FLIGHTS_CATEGORY not in it.get("cats", []):
                 continue
+            dep = departure(feed_id, it)
+            if dep is None:
+                continue
             seen_links.add(it["link"])
-            found.append((feed_id, it))
+            found.append((feed_id, it, dep))
     found.sort(key=lambda p: p[1]["published"], reverse=True)
-    flash = [p for p in found if term_hits(p[1]["title"].lower(), FLASH_WORDS)][:FLASH_PER_DAY]
+    flash = [p for p in found if p[2] == "pl" and term_hits(p[1]["title"].lower(), FLASH_WORDS)][:FLASH_PER_DAY]
     rest = [p for p in found if p not in flash][:NOTABLE_PER_DAY]
     result, shown = [], []
     for group in (flash, rest):
         rows, lines = [], []
-        for feed_id, it in group:
+        for feed_id, it, _ in group:
             feed_rows, notes = rows_for_matches(run, feed_id, [(it, [NOTABLE[feed_id]])], origin)
             rows.extend(feed_rows)
             lines.extend("  " + n for n in notes)
