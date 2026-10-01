@@ -24,13 +24,13 @@
 
 Словарь `source_id`: `google_flights`, `google_flights_trains`,
 `ryanair_site`, `ryanair_api`, `flixbus_api`, `wizzair_site`, `wizzair_api`,
-`lot_site`, `kiwi_mcp`, `azair_site`, `fly4free_pl_feed`, `fly4free_com_feed`,
+`lot_site`, `kiwi_mcp`, `turkish_mcp`, `azair_site`, `fly4free_pl_feed`, `fly4free_com_feed`,
 `wakacyjnipiraci_feed`, `holidaypirates_feed`, `pepper_feed`,
 `travelpayouts_api`, `nbp_api`, `web_site` (страница любого сайта «с глаз»: `url` и `raw`-фрагмент обязательны, статус не выше QUOTED, валюта источника — `--currency`), `CALC`.
 Суффикс должен сходиться с url: `_api` — только для адресов API,
 `_site` — только для страниц сайта, `_feed` — запись RSS-ленты. Страница
 бронирования Ryanair — это `ryanair_site`, не `ryanair_api`; у строки `ryanair_api` страница выбора рейса лежит в `link` (для `[ссылка id]`). У `kiwi_mcp`
-url — `bookingUrl` из ответа Kiwi. Какой скрипт какой `source_id` пишет —
+url — `bookingUrl` из ответа Kiwi, у `turkish_mcp` — deeplink тарифа на turkishairlines.com. Какой скрипт какой `source_id` пишет —
 `references/sources.md`.
 
 Дополнительно: `currency_observed: false`, если валюта в ответе источника
