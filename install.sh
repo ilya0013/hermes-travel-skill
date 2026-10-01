@@ -34,6 +34,10 @@ UV="uv --no-config"
 
 # 1. роль: файлы перезаписываются, profile.yaml владельца остаётся
 mkdir -p "$ROLE"
+# Индекс скиллов (имя, описание, platforms, условия из шапки SKILL.md) шлюз держит в памяти: новая роль или новая
+# шапка видны агенту в мессенджере только после /restart и /new; тело роли читается с диска при каждом вызове.
+head_of() { [ ! -f "$1" ] || awk 'NR==1 && $0=="---" {f=1; next} f && $0=="---" {exit} f && !/^version:/' "$1"; }
+OLD_HEAD=$(head_of "$ROLE/SKILL.md")
 if [ -f "$ROLE/profile.yaml" ]; then
   cp "$ROLE/profile.yaml" "/tmp/travel-profile.$$"
 fi
@@ -45,6 +49,8 @@ else
   echo "роль установлена, profile.yaml — Варшава по умолчанию (Шопен 4,40 zł, Модлин 35 zł, 1 взрослый)"
 fi
 find "$ROLE" -name __pycache__ -type d -exec rm -rf {} + 2>/dev/null || true
+[ "$OLD_HEAD" = "$(head_of "$ROLE/SKILL.md")" ] && echo "шапка роли прежняя — /restart не нужен" \
+  || echo "шапка роли новая — попроси человека отправить тебе /restart, затем /new (INSTALL.md, шаг 4)"
 
 # 2. venv источников
 if [ ! -x "$PY" ]; then
