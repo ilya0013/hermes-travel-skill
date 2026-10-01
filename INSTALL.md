@@ -9,7 +9,9 @@
 Роль «Штурман поездки» (`skills/travel/travel-role/SKILL.md`): по просьбе человека ищет перелёт
 и дорогу до аэропорта, считает цену «до двери» в злотых и присылает 2–3 варианта со ссылками на
 покупку. Источники без ключей: Kiwi (MCP), fare-finder Ryanair, Google Flights (fast-flights),
-AZair, Flixbus, ленты распродаж (RSS и Telegram-превью). Ничего не покупает и не бронирует.
+AZair, Flixbus, ленты распродаж (RSS и Telegram-превью). По желанию — кэш Aviasales (Travelpayouts):
+свой токен строкой `TRAVELPAYOUTS_TOKEN=…` в `.env` в `HERMES_HOME`; без него источник не зовётся.
+Ничего не покупает и не бронирует.
 
 ## 1. Установка (одна команда)
 

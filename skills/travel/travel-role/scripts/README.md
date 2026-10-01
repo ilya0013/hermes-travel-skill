@@ -1,7 +1,7 @@
 # Скрипты роли: источники, журнал, проверка
 
 Скрипты-источники (`kiwi_search.py`, `turkish_search.py`, `ryanair_fares.py`, `google_flights.py`,
-`wizz_farechart.py`, `azair_search.py`, `deal_feeds.py`, `flixbus_fares.py`), ручная строка
+`wizz_farechart.py`, `azair_search.py`, `deal_feeds.py`, `travelpayouts_prices.py`, `flixbus_fares.py`), ручная строка
 `journal_add.py`, тик дозора `watch_route.py` и свод по интересам (`deal_feeds.py --interest`,
 обёртка cron `/opt/data/scripts/travel/interest_digest.sh`) пишут журнал через общий `journal.py`; что каждый
 даёт и как звать — `../references/sources.md`. Запускаются venv источников
