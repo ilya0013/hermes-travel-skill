@@ -29,6 +29,7 @@ SOURCE_VOCAB = {
     "wizzair_api",
     "lot_site",
     "kiwi_mcp",
+    "turkish_mcp",
     "azair_site",
     "fly4free_pl_feed",
     "fly4free_com_feed",

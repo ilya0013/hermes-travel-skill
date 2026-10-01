@@ -105,6 +105,9 @@ FEEDS = {
     "travelfree_pl": "https://travelfree.info/category/poland/feed/",
     "travelfree_asia": "https://travelfree.info/tag/asia/feed/",
     "pepper_loty": "https://www.pepper.pl/rss/grupa/bilety-lotnicze",
+    # акции из писем перевозчиков: файл `mail_sales.py --parse` (cron каждый час), не сеть; нет файла — почта
+    # не подключена, лента молча не читается
+    "mail": "mail:",
 }
 # «Заметное вне интереса» (владелец 17.09.2026: «видеть, что происходит», а не только свой интерес):
 # записи этих лент с ценой в заголовке идут в свод и без совпадения с термами интереса — под словом
@@ -137,10 +140,12 @@ POLAND_WORDS = ("z warszawy", "warszaw", "z krakowa", "krakow", "kraków", "gda�
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) travel-role deal_feeds"
 
 # «2073 PLN», «299 zł», «1 299,99 zł», «€478», «£52», «478 EUR», «$550», «115 евро», «449 злотых»
-_NUM = r"(\d{1,3}(?:[ \u00a0]\d{3})*(?:[.,]\d{1,2})?|\d+(?:[.,]\d{1,2})?)"
+# «PLN 2,914» (письмо Emirates 28.09.2026: код валюты впереди, запятая — разделитель тысяч); хвост числа с точками
+# — не цена (подвал LOT: «kapitale zakładowym 203.214.923,28 PLN»)
+_NUM = r"(\d{1,3}(?:,\d{3})+(?![\d,])|\d{1,3}(?:[ \u00a0]\d{3})*(?:[.,]\d{1,2})?|\d+(?:[.,]\d{1,2})?)"
 _CUR_AFTER = r"(PLN|zł|zl|złotych|EUR|USD|GBP|€|\$|£|евро|злотых|злотые|злотый|зл)"
-_CUR_BEFORE = r"(€|\$|£)"
-PRICE_RE = re.compile(rf"{_NUM}\s*{_CUR_AFTER}(?![\w])|{_CUR_BEFORE}\s*{_NUM}", re.IGNORECASE)
+_CUR_BEFORE = r"(€|\$|£|(?<![A-Za-z])(?:PLN|EUR|USD|GBP))"
+PRICE_RE = re.compile(rf"(?<![\d.,]){_NUM}\s*{_CUR_AFTER}(?![\w])|{_CUR_BEFORE}\s*{_NUM}", re.IGNORECASE)
 CURRENCY = {"pln": "PLN", "zł": "PLN", "zl": "PLN", "złotych": "PLN", "eur": "EUR", "€": "EUR",
             "usd": "USD", "$": "USD", "gbp": "GBP", "£": "GBP",
             "евро": "EUR", "злотых": "PLN", "злотые": "PLN", "злотый": "PLN", "зл": "PLN"}
@@ -152,6 +157,8 @@ def pick_price(title):
     for m in PRICE_RE.finditer(title or ""):
         num = m.group(1) or m.group(4)
         cur = m.group(2) or m.group(3)
+        if re.fullmatch(r"\d{1,3}(?:,\d{3})+", num):
+            num = num.replace(",", "")
         value = float(num.replace("\u00a0", "").replace(" ", "").replace(",", "."))
         found.append((value, CURRENCY[cur.lower()], m.group(0)))
     return next((f for f in found if f[1] == "PLN"), found[0] if found else None)
@@ -240,7 +247,7 @@ def match_items(items, terms, since=None, from_poland=False, seen=()):
             continue
         if it["link"] in seen:
             continue
-        if from_poland and not any(w in it["text"] for w in POLAND_WORDS):
+        if from_poland and not (it.get("from_poland") or any(w in it["text"] for w in POLAND_WORDS)):
             continue
         hit = term_hits(it["text"], terms)
         if hit:
@@ -253,8 +260,108 @@ def fetch(url):
         return resp.read().decode("utf-8", errors="replace")
 
 
+MAIL_LINES = 4   # строк письма перед ценой: страна, город, подпись цены («Tajlandia / Bangkok / Zarezerwuj do… / od PLN 3,873»)
+MAIL_TAIL = 100  # и не длиннее этого — у письма без HTML строк нет
+
+
+FARE_PREFIX_RE = re.compile(r"(?<!\w)(?:od|from|ab|от)\s*$", re.IGNORECASE)
+
+
+def mail_prices(text):
+    """Цены билетов в тексте письма — с «od/from» перед числом («Rzym od 519 PLN», «od PLN 2,914»): так пишут
+    тариф; цены услуг того же письма — без него (LOT 23.09.2026: «Przewóz sprzętu za 1 PLN», «Standard 60 PLN»)."""
+    return [m for m in PRICE_RE.finditer(text) if FARE_PREFIX_RE.search(text[max(0, m.start() - 8):m.start()])]
+
+
+def mail_offers_path():
+    return os.path.join(os.environ.get("HERMES_HOME", "/opt/data"), "travel", "mail", "offers.jsonl")
+
+
+def load_mail_offers(path, today):
+    """Действующие акции из писем (продажа до ≥ today) — строки `mail_sales.py --parse`; нет файла — None."""
+    if not os.path.exists(path):
+        return None
+    offers = []
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            try:
+                offer = json.loads(line)
+            except ValueError:
+                continue
+            if offer.get("text") and (offer.get("sale_until") or "") >= today:
+                offers.append(offer)
+    return offers
+
+
+def _dm(iso, year=False):
+    return f"{iso[8:10]}.{iso[5:7]}" + (f".{iso[2:4]}" if year else "")
+
+
+def mail_terms(offer):
+    """«скидка до 15% · акция до 30.09 · полёт 12.10.26–03.01.27» — условия письма одной строкой."""
+    parts = [f"скидка до {offer['discount']}%"] if offer.get("discount") else []
+    parts.append(f"акция до {_dm(offer['sale_until'])}")
+    if offer.get("travel_to"):
+        start = f"{_dm(offer['travel_from'], True)}–" if offer.get("travel_from") else "до "
+        parts.append(f"полёт {start}{_dm(offer['travel_to'], True)}")
+    return " · ".join(parts)
+
+
+def mail_items(offers):
+    """Цены писем — записями ленты: запись = цена и текст перед ней (MAIL_LINES строк после прошлой цены, не
+    длиннее MAIL_TAIL), совпадение ищется только в этом хвосте — так «Rzym od 519 PLN» не отдаёт цену соседнего
+    города. Строка, на которой стояла прошлая цена, — её («- najniższa cena w ciągu ostatnich 30 dni»). Старая
+    зачёркнутая цена сюда не доходит (mail_sales её вырезает). Цена в PLN — вылет из Польши: рассылки
+    польского рынка (LOT, Emirates PL) считают от Варшавы."""
+    out = []
+    for o in offers:
+        prev = 0
+        for m in mail_prices(o["text"]):
+            lines = o["text"][prev:m.end()].split("\n")
+            if prev and len(lines) > 1:
+                lines = lines[1:]
+            tail = " ".join(" ".join(lines[-MAIL_LINES:]).split())
+            prev = m.end()
+            if len(tail) > MAIL_TAIL:
+                tail = tail[-MAIL_TAIL:].split(" ", 1)[-1]
+            out.append({"title": f"{o['sender']}: {tail} · {mail_terms(o)}", "link": o["link"],
+                        "published": o["date"], "text": tail.lower(), "price_text": m.group(0),
+                        "from_poland": parse_price(m.group(0))[1] == "PLN"})
+    return out
+
+
+MAIL_FLASH_PER_DAY = 3
+
+
+def mail_flash(seen_links, today):
+    """Акции из писем с ценой билета в PLN — в день сбора блоком «⚡», письмо одной строкой (слово владельца
+    01.10.2026: «в день письма, только с ценами»; без цен — Wizz «до −15%» через день — шум). Письмо показывается
+    раз: ссылка уходит в seen и в интерес уже не идёт. Возвращает (строки, показанные ссылки)."""
+    lines, shown = [], []
+    for o in sorted(load_mail_offers(mail_offers_path(), today) or [], key=lambda o: o["date"], reverse=True):
+        prices = [parse_price(m.group(0)) for m in mail_prices(o["text"])]
+        pln = [v for v, cur in prices if cur == "PLN"]
+        if not pln or o["link"] in seen_links or len(lines) >= MAIL_FLASH_PER_DAY:
+            continue
+        subject = o["subject"] if len(o["subject"]) <= 50 else o["subject"][:49].rstrip() + "…"
+        lines.append(f"• {_dm(o['date'])} · od {min(pln):g} PLN · {o['sender']}: {subject} · {mail_terms(o)} · "
+                     f"[письмо]({o['link']})")
+        shown.append(o["link"])
+    return lines, shown
+
+
+def site_offers(offers):
+    """Акции без цен в письме (Wizz «до −15% на выбранные рейсы», Etihad, Pegasus): цены — только на сайте
+    перевозчика (слово владельца 01.10.2026). Строки для агента: условия и ссылка на письмо."""
+    return [f"  [mail] {o['date']} {o['sender']}: {o['subject']} · {mail_terms(o)} · цены на сайте → {o['link']}"
+            for o in offers if not mail_prices(o["text"])]
+
+
 def read_feed(feed_id):
     url = FEEDS[feed_id]
+    if url == "mail:":
+        offers = load_mail_offers(mail_offers_path(), date.today().isoformat())
+        return None if offers is None else mail_items(offers)
     if url.startswith("tg:"):
         return parse_telegram(fetch(f"https://t.me/s/{url[3:]}"))
     return parse_feed(fetch(url))
@@ -369,7 +476,7 @@ def scan(run, feed_ids, terms, since, origin, from_poland, seen_links, max_pln=N
         items = cached_feed(feed_id)
         if items is None:
             continue
-        read += 1
+        read += feed_id != "mail"   # свой файл, не сеть: прочитан — не значит, что ленты проверены
         matches = list(match_items(items, terms, since, from_poland, seen_links))
         if max_pln is not None:  # выше потолка — не показана, значит и не «показанная»
             matches = [(it, hit) for it, hit in matches if not above_ceiling(it, max_pln)]
@@ -577,6 +684,8 @@ def main():
     if args.interest:
         interests = load_interests(args.interest, today)
         rows, shown, read, out, sheet = [], [], 0, [], []
+        # письма — первыми: акция живёт дни, в интерес попала бы до понедельника
+        letters, shown = mail_flash(seen_links, today) if "mail" in feed_ids else ([], [])
         for cfg in interests:
             i_rows, leads, summary, i_shown, i_read = scan(
                 run, feed_ids, cfg["terms"], since, cfg.get("from", args.origin),
@@ -596,7 +705,7 @@ def main():
             print("действующих интересов нет — только заметное и флэш", file=sys.stderr)
         (f_rows, flash), (n_rows, notable), n_shown = scan_notable(
             run, feed_ids, since, args.origin, seen_links | set(shown), [t for c in interests for t in c["terms"]])
-        read = max(read, sum(1 for f in feed_ids if _CACHE.get(f) is not None))
+        read = max(read, sum(1 for f in feed_ids if f != "mail" and _CACHE.get(f) is not None))
         rows.extend(f_rows + n_rows)
         shown.extend(n_shown)
         sheet.extend([("флэш", r) for r in f_rows] + [("заметное", r) for r in n_rows])
@@ -613,6 +722,7 @@ def main():
         if _NOTES and (digest_day or not args.pending):
             digest += "\n".join(_NOTES) + "\n"
         # флэш — в день сбора, мимо копилки: до понедельника распродажа не доживёт
+        flash = letters + flash
         if flash:
             digest = "\n".join([FLASH_HEAD, *flash, ""]) + digest
         url = push_sheet(sheet, args)
@@ -623,16 +733,19 @@ def main():
             _save_seen(args, shown)
             if interests or rows:
                 journal.finish(args, run, rows)
-        wanted = bool(interests) or any(f in NOTABLE for f in feed_ids)
+        wanted = any(f != "mail" for f in feed_ids) and (bool(interests) or any(f in NOTABLE for f in feed_ids))
         return 0 if read or not wanted else _no_feeds()
     terms = split_terms(args.match)
     for note in common_word_notes(terms):   # предпроверка слов интереса (watch.md) идёт этим режимом
         print(note, file=sys.stderr)
     rows, leads, summary, shown, read = scan(run, feed_ids, terms, since, args.origin, args.from_poland, seen_links)
     print("\n".join(summary + leads))
+    site = site_offers(load_mail_offers(mail_offers_path(), today) or []) if "mail" in feed_ids else []
+    if site:   # без цены — не в журнал: агент сверяет акцию ценой перевозчика на своих датах
+        print("\n".join(["акции на сайте перевозчика (цен в письме нет — проверь свой маршрут у перевозчика):", *site]))
     _save_seen(args, shown)
     journal.finish(args, run, rows)
-    return 0 if read else _no_feeds()
+    return 0 if read or all(f == "mail" for f in feed_ids) else _no_feeds()   # сетевых лент не просили — нечего проверять
 
 
 def _no_feeds():

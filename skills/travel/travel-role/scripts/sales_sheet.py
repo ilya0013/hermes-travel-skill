@@ -11,7 +11,7 @@
 первичная запись: журнал `observations.jsonl` и копилка `pending.md` живут без неё. Ходит токеном агента
 через `build_service` скилла google-workspace — потому питон Hermes, не venv источников. Печатает JSON
 `{"url": …, "appended": N}`; любая ошибка — код 1 и текст в stderr (deal_feeds её только докладывает).
-Колонки «продажа до» и «полёт когда» — под письма перевозчиков (следующий кусок), у лент пусты.
+Колонки «продажа до» и «полёт когда» заполняют письма перевозчиков (`mail_sales.py --parse`), у лент пусты.
 """
 
 import datetime
@@ -35,7 +35,7 @@ def to_values(rows, today):
         words = r.get("matched") or []
         out.append([today, r.get("dates") or "", r.get("block") or "", str(r.get("source_id") or "").removesuffix("_feed"),
                     ", ".join(str(w) for w in words), r.get("value"), r.get("currency") or "", r.get("raw") or "",
-                    r.get("url") or "", "", ""])
+                    r.get("url") or "", r.get("sale_until") or "", r.get("travel") or ""])
     return out
 
 

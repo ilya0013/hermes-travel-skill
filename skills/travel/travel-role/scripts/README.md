@@ -1,6 +1,6 @@
 # Скрипты роли: источники, журнал, проверка
 
-Скрипты-источники (`kiwi_search.py`, `ryanair_fares.py`, `google_flights.py`,
+Скрипты-источники (`kiwi_search.py`, `turkish_search.py`, `ryanair_fares.py`, `google_flights.py`,
 `wizz_farechart.py`, `azair_search.py`, `deal_feeds.py`, `flixbus_fares.py`), ручная строка
 `journal_add.py`, тик дозора `watch_route.py` и свод по интересам (`deal_feeds.py --interest`,
 обёртка cron `/opt/data/scripts/travel/interest_digest.sh`) пишут журнал через общий `journal.py`; что каждый
@@ -9,7 +9,7 @@
 в репозитории. Витрина наводок `sales_sheet.py` (Google Sheet «Распродажи» в «Поездках») — исключение:
 её зовёт `deal_feeds.py` питоном Hermes, потому что ходит токеном агента, как `drive_report.py`.
 Так же питоном Hermes идёт `mail_sales.py` — письма перевозчиков в Gmail под ярлык `avia-sale`
-мимо Входящих (cron каждый час, обёртка `/opt/data/scripts/travel/mail_sales.sh`).
+мимо Входящих и разбор акций в `travel/mail/offers.jsonl` (cron каждый час, обёртка `/opt/data/scripts/travel/mail_sales.sh`).
 
 ## Отчёт для человека: report_render и drive_report
 

@@ -8,4 +8,4 @@ H="@HERMES_HOME@"
 export HERMES_HOME="$H"
 exec /opt/hermes/.venv/bin/python3 \
   "$H/skills/travel/travel-role/scripts/mail_sales.py" \
-  --days 3
+  --days 3 --parse
