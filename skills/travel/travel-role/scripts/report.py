@@ -30,6 +30,7 @@ import yaml
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+import airports  # noqa: E402
 import journal  # noqa: E402
 
 PROFILE = HERE.parent / "profile.yaml"
@@ -278,12 +279,13 @@ def overnight(row):
     return bool(m and int(m.group(1)) * 60 + int(m.group(2)) + int(m.group(3)) * 60 + int(m.group(4)) >= 24 * 60)
 
 
-def auto_candidates(rows, sources, nights, bags, home, pax):
+def auto_candidates(rows, sources, nights, bags, home, pax, weekend_only=False):
     """Все допустимые поездки из строк прогона: строка «туда/обратно» (Kiwi, Google) или пара одиночных
     плеч (fare-finder, Google в одну сторону) с вылетом и прилётом в домашние аэропорты `home`, ночей в
-    `nights`, пассажиров `pax`. Эвалы 15.09.2026: сборка пар, отданная модели, три прогона подряд давала
-    три разных ответа при одних и тех же строках (Kiwi 167 за связку Ryanair 65 + 65). Возвращает
-    (кандидаты, сколько строк отброшено без багажа)."""
+    `nights`, пассажиров `pax`; с `weekend_only` — «на выходные» (`journal.weekend`). Эвалы 15.09.2026: сборка
+    пар, отданная модели, три прогона подряд давала три разных ответа при одних и тех же строках (Kiwi 167 за
+    связку Ryanair 65 + 65). Пара — и через два аэропорта одного города (туда в FCO, обратно из CIA:
+    `airports.CITIES`). Возвращает (кандидаты, сколько строк отброшено без багажа)."""
     lo, hi = nights
     flights = [r for r in rows if r.get("kind") in FLIGHT_KINDS and r.get("source_id") != "CALC"
                and not is_ground(r, sources) and r.get("status") != "ORIENTIR"
@@ -299,7 +301,8 @@ def auto_candidates(rows, sources, nights, bags, home, pax):
             segs = str(r.get("route") or "").split("/")
             start, back = segs[0].partition("-")[0], (segs[-1].partition("-")[2] if len(segs) > 1 else segs[0].partition("-")[0])
             spent = (day(d[1]) - day(d[0])).days - (1 if overnight(r) else 0)   # ночь в пути — не ночь там
-            if lo <= spent <= hi and start in home and back in home:
+            if lo <= spent <= hi and start in home and back in home and (
+                    not weekend_only or journal.weekend(day(d[0]), day(d[1]))):
                 cands.append([r])
     singles = [r for r in flights if day(r.get("dates"))]
     for o in singles:                                    # пара плеч: X-Y туда, Y-Z обратно
@@ -308,7 +311,8 @@ def auto_candidates(rows, sources, nights, bags, home, pax):
             continue
         for b in singles:
             y2, _, z = str(b.get("route") or "").partition("-")
-            if y2 == y and z in home and lo <= (day(b["dates"]) - day(o["dates"])).days <= hi:
+            if airports.same_city(y2, y) and z in home and lo <= (day(b["dates"]) - day(o["dates"])).days <= hi \
+                    and (not weekend_only or journal.weekend(day(o["dates"]), day(b["dates"]))):
                 cands.append([o, b])
     return cands, no_bags
 
@@ -374,7 +378,8 @@ def build(args, rows, profile):
     results, auto_note = [], None
     if getattr(args, "auto", False):
         home = [c.strip() for c in (args.home or ",".join(profile.get("home", {}).get("airports", {}))).split(",")]
-        cands, no_bags = auto_candidates(rows, sources, args.nights, args.bags, home, pax)
+        weekend_only = getattr(args, "weekend", False)
+        cands, no_bags = auto_candidates(rows, sources, args.nights, args.bags, home, pax, weekend_only)
         seen, priced = set(), []
         for c in cands:
             key = tuple((r.get("route"), r.get("dates"), round(r["value"])) for r in c)   # дубли Kiwi одной цены
@@ -387,6 +392,7 @@ def build(args, rows, profile):
             results.append(v)
         auto_note = (f"auto: кандидатов {len(cands)}, ночей {args.nights[0]}–{args.nights[1]}, из {','.join(home)}, "
                      f"{pax} чел., {'с багажом' if args.bags else 'без багажа'}"
+                     + (", на выходные" if weekend_only else "")
                      + (f"; без багажа отброшено строк: {no_bags}" if no_bags else "")
                      + ("" if priced else " — ни одной поездки не собрать: строк «туда/обратно» и пар плеч с такими "
                         "ночами, аэропортами и пассажирами в прогоне нет; проверь --nights, --home, --pax"))
@@ -507,6 +513,7 @@ def main():
     ap.add_argument("--bags", type=int, choices=(0, 1), default=0, help="для --auto: 1 — только строки с чемоданом в цене")
     ap.add_argument("--home", help="для --auto: домашние аэропорты через запятую (WAW,WMI); по умолчанию все из профиля")
     ap.add_argument("--top", type=int, default=3, help="для --auto: сколько кандидатов печатать")
+    ap.add_argument("--weekend", action="store_true", help="для --auto: «на выходные» — ночи пятницы и субботы там")
     ap.add_argument("--no-drive", action="store_true")
     ap.add_argument("--reports-dir", default=str(REPORTS))
     args = ap.parse_args()

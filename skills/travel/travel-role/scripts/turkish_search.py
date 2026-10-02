@@ -21,6 +21,7 @@ import sys
 import urllib.error
 import urllib.request
 
+import airports
 import journal
 
 SOURCE_ID = "turkish_mcp"
@@ -164,7 +165,8 @@ def main():
     journal.add_common_args(ap)
     ns = ap.parse_args()
     run = journal.run_id(ns)
-    origin, dest = ns.origin.upper(), ns.dest.upper()
+    # код города сервер не знает: TYO — «рейсов нет», NRT — рейсы и в HND (эвал 02.10.2026)
+    origin, dest = airports.main_airport(ns.origin.upper()), airports.main_airport(ns.dest.upper())
     pax = [{"passengerType": "ADT", "quantity": ns.adults}]
     try:
         if ns.calendar:

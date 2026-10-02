@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Google Flights через fast-flights, без браузера: блок «лучшие» (~6 вариантов), все перевозчики.
+"""Google Flights через fast-flights, без браузера: оба блока выдачи («лучшие» и остальные), все перевозчики.
 
     /opt/data/travel/lib/venv/bin/python google_flights.py WAW BCN 2026-10-09 [2026-10-12] \
         [--adults 1] [--max-stops 1] [--top 6] [--airline Wizz]
 
 Одна строка QUOTED на вариант; цена — за всех пассажиров в обе стороны, как показывает Google.
-`--airline` оставляет варианты одного перевозчика и без `--max-stops` ищет прямые: в блоке
-«лучшие» без этого прямой Wizz WAW→BCN 26.10 (209 zł) прятался за стыковками Lufthansa от 751
-(проверено 14.09.2026). Нет такого перевозчика — строк нет, код 1.
+`--airline` оставляет варианты одного перевозчика и без `--max-stops` ищет прямые. Прямой Wizz WAW→BCN 26.10
+(209 zł) 14.09.2026 «прятался за стыковками Lufthansa от 751» — это fast-flights 3.1.0 читал один блок из двух и падал
+на варианте без цены; с main авторов (PR #114/#115, коммит в requirements) WAW→FCO 21.11: Wizz 109 первым, а не KLM 383
+(эвал 02.10.2026). Нет такого перевозчика — строк нет, код 1.
 Валюта в ответе не приходит, берётся из параметра запроса → currency_observed: false (W202).
 Блок «Statystyki cen» (эталон) этот путь не отдаёт — за эталоном роль идёт браузером.
 """
@@ -29,13 +30,14 @@ def leg_text(fl):
 
 def rows_for_results(run, results, origin, dest, dates, pax, currency, url, top, airline=None):
     rows = []
-    items = list(results)
+    # вариант без тарифа (fast-flights PR #114) — мимо; оба блока дают 16–20 вариантов — `top` самых дешёвых
+    items = sorted((it for it in results if it.price is not None), key=lambda it: it.price)
     if airline:
         items = [it for it in items if any(airline.lower() in a.lower() for a in it.airlines)]
     for item in items[:top]:
         raw = (f"{'+'.join(item.airlines)}; {', '.join(leg_text(f) for f in item.flights)}; "
                f"{item.price} {currency}, {'w obie strony' if '/' in dates else 'w jedna strone'}, "
-               f"blok najlepsze, typ {item.type}")
+               f"wyniki Google, typ {item.type}")
         rows.append(journal.observation(
             run, "fare", SOURCE_ID, url, f"{origin}-{dest}", dates, float(item.price), currency,
             "QUOTED", raw, pax=pax, currency_observed=False,
@@ -82,7 +84,7 @@ def main():
     rows = rows_for_results(run, results, args.origin, args.dest, dates, args.adults, currency,
                             query.url(), args.top, args.airline)
     if not rows:
-        what = f"нет вариантов {args.airline}" if args.airline else "блок «лучшие» пуст"
+        what = f"нет вариантов {args.airline}" if args.airline else "выдача пуста"
         print(f"Google Flights: {what}", file=sys.stderr)
     journal.finish(args, run, rows)
     return 0 if rows else 1

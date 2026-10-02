@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Ryanair fare-finder через ryanair-py: минимум по дню (тариф Basic, 1 взрослый), PLN.
 
-    /opt/data/travel/lib/venv/bin/python ryanair_fares.py WMI BCN 2026-10-09 [2026-10-12] [--flex 3]
-    /opt/data/travel/lib/venv/bin/python ryanair_fares.py WMI BCN --month 2026-10
+    /opt/data/travel/lib/venv/bin/python ryanair_fares.py WMI BCN 2026-10-09 [2026-10-12] [--flex 3] [--pax 2]
+    /opt/data/travel/lib/venv/bin/python ryanair_fares.py WMI BCN --month 2026-10 [--pax 2]
+
+`--pax N` — цена в строке на всех (на одного × N, pax=N): так `report.py --auto --pax N` берёт эти строки.
 
 На запрошенную дату — строка kind=fare, на соседние дни окна --flex — other_date.
 С --month — минимум по каждому дню месяца в обе стороны (эндпоинт cheapestPerDay, один
@@ -28,16 +30,22 @@ import journal
 
 SOURCE_ID = "ryanair_api"
 ENDPOINT = "https://services-api.ryanair.com/farfnd/v4/oneWayFares"
-SELECT_PAGE = ("https://www.ryanair.com/pl/pl/trip/flights/select?adults=1&dateOut={day}"
+SELECT_PAGE = ("https://www.ryanair.com/pl/pl/trip/flights/select?adults={pax}&dateOut={day}"
                "&originIata={origin}&destinationIata={dest}&isReturn=false&discount=0")
 # без searchMode=ALL fare-finder отдаёт один самый дешёвый день окна, а не каждый день:
 # проверено 14.09.2026, WMI-BCN ±3 дня — 1 строка против 4 (заметка агента 13.09.2026)
 SEARCH_ALL = {"searchMode": "ALL"}
 
 
-def select_link(origin, dest, day):
-    """Страница выбора рейса Ryanair на плечо и день, 1 взрослый — та, что открывал агент браузером."""
-    return SELECT_PAGE.format(origin=origin, dest=dest, day=day)
+def select_link(origin, dest, day, pax=1):
+    """Страница выбора рейса Ryanair на плечо, день и число взрослых — та, что открывал агент браузером."""
+    return SELECT_PAGE.format(origin=origin, dest=dest, day=day, pax=pax)
+
+
+def for_pax(value, raw, pax):
+    """Цена на всех: fare-finder отдаёт на одного взрослого, сайт на N = цена × N (эвал 02.10.2026, Рим вдвоём:
+    4 рейса из 4, 235,48 = 117,74 × 2). Мест по этой цене может быть меньше N — сайт покажет дороже."""
+    return (round(value * pax, 2), raw + (f" × {pax} пасс." if pax > 1 else ""))
 
 
 def query_url(origin, dest, date_from, date_to, currency="PLN"):
@@ -71,7 +79,7 @@ def month_url(origin, dest, year_month, currency="PLN"):
             f"{urlencode({'outboundMonthOfDate': year_month + '-01', 'currency': currency})}")
 
 
-def rows_for_month(run, fares, origin, dest, url):
+def rows_for_month(run, fares, origin, dest, url, pax=1):
     """Строки из cheapestPerDay: по одной на день с ценой; дни без рейса и не в PLN пропускаются."""
     rows = []
     for f in fares:
@@ -82,12 +90,13 @@ def rows_for_month(run, fares, origin, dest, url):
             print(f"{origin}-{dest} {f.get('day')}: {price.get('value')} {price.get('currencyCode')} — "
                   "валюта не PLN, в журнал не идёт", file=sys.stderr)
             continue
-        raw = (f"cheapestPerDay {f['day']} {f.get('departureDate', '')[11:16]}-{f.get('arrivalDate', '')[11:16]} "
-               f"{origin}-{dest} {price['value']:.2f} {price['currencyCode']} (Basic)")
+        value, raw = for_pax(float(price["value"]), (
+            f"cheapestPerDay {f['day']} {f.get('departureDate', '')[11:16]}-{f.get('arrivalDate', '')[11:16]} "
+            f"{origin}-{dest} {price['value']:.2f} {price['currencyCode']} (Basic)"), pax)
         rows.append(journal.observation(
             run, "other_date", SOURCE_ID, url, f"{origin}-{dest}", f["day"],
-            float(price["value"]), price["currencyCode"], "QUOTED", raw,
-            link=select_link(origin, dest, f["day"]),
+            value, price["currencyCode"], "QUOTED", raw, pax=pax,
+            link=select_link(origin, dest, f["day"], pax),
         ))
     return rows
 
@@ -98,17 +107,17 @@ def fetch_month(url):
         return json.load(resp)["outbound"]["fares"]
 
 
-def rows_for_leg(run, flights, origin, dest, wanted, url):
+def rows_for_leg(run, flights, origin, dest, wanted, url, pax=1):
     """Строки журнала из объектов Flight ryanair-py (по одному на день окна)."""
     rows = []
     for f in sorted(flights, key=lambda x: x.departureTime):
         day = f.departureTime.date().isoformat()
-        raw = (f"{f.flightNumber} {f.departureTime.strftime('%Y-%m-%d %H:%M')} "
-               f"{f.origin}-{f.destination} {f.price:.2f} {f.currency} (fare-finder, Basic)")
+        value, raw = for_pax(float(f.price), (f"{f.flightNumber} {f.departureTime.strftime('%Y-%m-%d %H:%M')} "
+                                              f"{f.origin}-{f.destination} {f.price:.2f} {f.currency} (fare-finder, Basic)"), pax)
         rows.append(journal.observation(
             run, "fare" if day == wanted else "other_date", SOURCE_ID, url,
-            f"{f.origin}-{f.destination}", day, float(f.price), f.currency, "QUOTED", raw,
-            link=select_link(f.origin, f.destination, day),
+            f"{f.origin}-{f.destination}", day, value, f.currency, "QUOTED", raw, pax=pax,
+            link=select_link(f.origin, f.destination, day, pax),
         ))
     return rows
 
@@ -121,6 +130,7 @@ def main():
     ap.add_argument("date_back", nargs="?")
     ap.add_argument("--flex", type=int, default=0, help="±дней вокруг каждой даты")
     ap.add_argument("--month", help="YYYY-MM: весь месяц в обе стороны вместо дат")
+    ap.add_argument("--pax", type=int, default=1, help="взрослых: цена в строке — на всех (на одного × N)")
     journal.add_common_args(ap)
     args = ap.parse_args()
     if bool(args.month) == bool(args.date_out):
@@ -139,7 +149,7 @@ def main():
     if args.month:
         for origin, dest in ((args.origin, args.dest), (args.dest, args.origin)):
             url = month_url(origin, dest, args.month)
-            leg_rows = rows_for_month(run, fetch_month(url), origin, dest, url)
+            leg_rows = rows_for_month(run, fetch_month(url), origin, dest, url, args.pax)
             if not leg_rows:
                 print(f"{origin}-{dest} {args.month}: cheapestPerDay пуст (нет рейсов)", file=sys.stderr)
             rows.extend(leg_rows)
@@ -157,7 +167,7 @@ def main():
         d_from, d_to = window(wanted, args.flex)
         url = query_url(origin, dest, d_from, d_to)
         flights = fetch_window(api, origin, dest, d_from, d_to)
-        leg_rows = rows_for_leg(run, flights, origin, dest, wanted, url)
+        leg_rows = rows_for_leg(run, flights, origin, dest, wanted, url, args.pax)
         if not leg_rows:
             print(f"{origin}-{dest} {d_from}..{d_to}: fare-finder пуст (нет рейсов или дат)", file=sys.stderr)
         rows.extend(leg_rows)
@@ -169,6 +179,7 @@ def main():
         rows.append(journal.calc(
             run, "fare", f"{args.origin}-{args.dest}", f"{args.date_out}/{args.date_back}",
             "sum", [out_row, back_row], f"{out_row['value']:.2f}+{back_row['value']:.2f} (два one-way Basic)",
+            pax=args.pax,
         ))
 
     journal.finish(args, run, rows)

@@ -143,6 +143,9 @@ NEIGHBOUR_WORDS = ("berlin", "prague", "praha", "z pragi", "vienna", "wiedeń", 
                    "vilnius", "wilno", "z wilna", "берлин", "из праги", "из вены", "будапешт", "вильнюс")
 # ленты с вылетами со всей Европы; остальные «заметные» — польские, вылет из Польши отобрала редакция
 FOREIGN_FEEDS = ("fly4free_com_asia", "travelfree_asia")
+# общеевропейские ленты: в описании — список городов ВЫЛЕТА («Departures: Rome, Milan, Warsaw»), направление — в заголовке
+# после «to». Эвал 02.10.2026: `--match Rome,Italy` нашло Шарджу и Мальдивы — оба места «до двух на слово» заняты чужим
+DEST_IN_TITLE = ("fly4free_com", "fly4free_com_asia", "travelfree_pl", "travelfree_asia", "holidaypirates")
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) travel-role deal_feeds"
 
 # «2073 PLN», «299 zł», «1 299,99 zł», «€478», «£52», «478 EUR», «$550», «115 евро», «449 злотых»
@@ -255,7 +258,7 @@ def match_items(items, terms, since=None, from_poland=False, seen=()):
             continue
         if from_poland and not (it.get("from_poland") or any(w in it["text"] for w in POLAND_WORDS)):
             continue
-        hit = term_hits(it["text"], terms)
+        hit = term_hits(it.get("match_text") or it["text"], terms)   # вылет из Польши — по всему тексту, выше
         if hit:
             yield it, hit
 
@@ -370,7 +373,12 @@ def read_feed(feed_id):
         return None if offers is None else mail_items(offers)
     if url.startswith("tg:"):
         return parse_telegram(fetch(f"https://t.me/s/{url[3:]}"))
-    return parse_feed(fetch(url))
+    items = parse_feed(fetch(url))
+    if feed_id in DEST_IN_TITLE:
+        to = lambda s: s.split(" to ", 1)[1] if " to " in s else s   # noqa: E731
+        for it in items:   # заголовок после «to» и рубрики «cheap flights to Seoul», «athens to the uae» (ревью 02.10.2026)
+            it["match_text"] = " ".join([to(it["title"].lower()), *(to(c) for c in it.get("cats", []) if " to " in c)])
+    return items
 
 
 def load_seen(path):
@@ -535,7 +543,8 @@ def scan_notable(run, feed_ids, since, origin, seen_links, interest_terms=()):
         for it in items:
             if it["link"] in seen_links or (since and it["published"] and it["published"] < since):
                 continue
-            if price_of(it)[0] is None or not it["published"] or term_hits(it["text"], interest_terms):
+            if price_of(it)[0] is None or not it["published"] or \
+                    term_hits(it.get("match_text") or it["text"], interest_terms):
                 continue
             # fly4free.pl метит перелёты рубрикой «Loty», пакеты «loty i hotel» — «Wczasy»/«pakiety» без неё
             # (живой прогон 17.09.2026: 3 из 5 «заметных» были пакетами)

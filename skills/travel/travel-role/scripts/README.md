@@ -10,6 +10,8 @@
 её зовёт `deal_feeds.py` питоном Hermes, потому что ходит токеном агента, как `drive_report.py`.
 Так же питоном Hermes идёт `mail_sales.py` — письма перевозчиков в Gmail под ярлык `avia-sale`
 мимо Входящих и разбор акций в `travel/mail/offers.jsonl` (cron каждый час, обёртка `/opt/data/scripts/travel/mail_sales.sh`).
+Города с несколькими аэропортами (Фьюмичино и Чампино, Нарита и Ханэда) — `airports.py`: `report.py` собирает пару
+плеч через два аэропорта города, `turkish_search.py` меняет код города на главный аэропорт.
 
 ## Отчёт для человека: report_render и drive_report
 

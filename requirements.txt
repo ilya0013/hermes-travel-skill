@@ -1,7 +1,10 @@
 # venv источников travel-роли — версии сняты с рабочего контейнера 15.09.2026
 # (/opt/data/travel/lib/venv, Python 3.13.5). Ставится install.sh через uv.
 mcp==2.2.0
-fast-flights==3.1.0
+# fast-flights — main авторов: PR #114 (оба блока выдачи, вариант без цены не роняет разбор) и #115 (полная выдача);
+# в PyPI 3.1.0 их нет (02.10.2026). typing-extensions main импортирует, но не объявляет.
+fast-flights @ git+https://github.com/AWeirdDev/flights@7c105db4ed5f73fbadbf6b0e9f6bdfd71f352d97
+typing-extensions==4.16.0
 flywizz==0.1.0
 ryanair-py==3.0.0
 requests==2.34.2

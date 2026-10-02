@@ -1,7 +1,7 @@
 ---
 name: travel-role
 description: "Поиск поездки для владельца: перелёт и дорога до двери, где купить дешевле. Включай, когда он просит билеты, рейсы, перелёт, «куда дешевле», «стоит ли ждать», 'find me a flight', 'cheap flights to', или говорит «травел-режим», «включи поиск билетов». По смыслу, не по точной фразе. Не покупает и не бронирует."
-version: 1.3.18
+version: 1.3.20
 author: hermes-travel-skill
 license: MIT
 platforms: [linux]
@@ -20,9 +20,9 @@ metadata:
 Не для покупки, регистрации на рейс, отелей без перелёта — скажи, что не твоё.
 
 ## Как запускать
-Все команды — через `terminal`. Скрипты источников — venv `/opt/data/travel/lib/venv/bin/python`,
-`report.py` — питон Hermes с `HERMES_HOME=/opt/data`. Каталог `S=/opt/data/skills/travel/travel-role/scripts`,
-профиль дома — `/opt/data/skills/travel/travel-role/profile.yaml`. Аргументы Kiwi — файлом `@args.json`
+Все команды — через `terminal`, без `background` (долгий скрипт — `timeout: 600`; фон шлёт владельцу лишнее «процесс завершён»
+после отчёта). Скрипты источников — venv `/opt/data/travel/lib/venv/bin/python`, `report.py` — питон Hermes с `HERMES_HOME=/opt/data`.
+Каталог `S=/opt/data/skills/travel/travel-role/scripts`, профиль дома — `/opt/data/skills/travel/travel-role/profile.yaml`. Аргументы Kiwi — файлом `@args.json`
 (записать `write_file`), не строкой. Скрипты, их слепые пятна и замены — `references/sources.md`; дозор, ленты, письма — `references/watch.md`.
 
 ## Порядок
@@ -35,16 +35,16 @@ metadata:
    `mkdir -p /opt/data/tmp && date -u +%Y%m%dT%H%M%S > /opt/data/tmp/travel_run.$HERMES_SESSION_ID`
    первой командой, дальше в каждой `R=$(cat /opt/data/tmp/travel_run.$HERMES_SESSION_ID)`: переменная
    между вызовами `terminal` не живёт, файл живёт. Упавший скрипт run не печатает; строки разных run в
-   один отчёт не складываются. Порядок доверия: перевозчик (`ryanair_fares.py`, окно `--flex` или `--month`;
-   `turkish_search.py` — Turkish из Шопена, дальние через Стамбул, туда-обратно одной строкой) → Google Flights (`google_flights.py`, все перевозчики; плечо Wizz — `--airline
-   Wizz`; багажа в строке Google нет — при чемодане цену сверь Kiwi `--airlines <код> --hold-bags
-   1`; «парсер упал» в stderr — источник в `--failed`, не «рейсов нет») → Kiwi (`kiwi_search.py`:
-   связки, багаж, время в пути плеча в строке; цену Ryanair/Wizz из Kiwi сверяй с перевозчиком).
+   один отчёт не складываются. Порядок доверия: перевозчик (`ryanair_fares.py`, окно `--flex` или `--month`, двое и больше — `--pax N`;
+   `turkish_search.py` — Turkish из Шопена, дальние через Стамбул, туда-обратно одной строкой) → Google Flights (`google_flights.py`,
+   все перевозчики и Wizz, самые дешёвые; багажа в строке нет — при чемодане сверь Kiwi `--airlines <код> --hold-bags 1`; «парсер
+   упал» — источник в `--failed`, не «рейсов нет») → Kiwi (`kiwi_search.py`: связки, багаж, время в пути плеча; цену Ryanair/Wizz сверяй с перевозчиком).
    Дорога до аэропорта: дома — профиль и `flixbus_fares.py` (Модлин); за границей строка
    `--kind ground` только если аэропорт за городом (автобус или поезд с сайта перевозчика);
    аэропорт в черте города — одна фраза в сообщении, без поиска и без строки. Дешевле порога
    профиля (`ground_min_pln`) скрипт в сумму не берёт — называешь словами, без числа.
    Дальний маршрут: Kiwi с окном `--out-to` и `--nights`, Google на лучшие даты, `--self-transfer` — с риском.
+   «На выходные» — Kiwi `--weekends` (сам переберёт пт→вс, чт→вс, пт→пн окна; страна годится: `WAW Spain`).
    Связки лоукостеров по Европе и Средиземноморью — `azair_search.py WAW BCN --run $R --out-from …
    --out-to … --nights 2-4`, `--extra-from WMI` только если Модлин годится: кэш AZair, ORIENTIR —
    в вариант не идёт, каждое плечо подтверди у перевозчика; Азии и Дохи у AZair нет.
@@ -59,7 +59,7 @@ metadata:
    `journal_add.py --run R --kind fare --source-id web_site --url <страница> --value 89.99 --currency EUR --status QUOTED --raw "<фрагмент как есть>"`.
    Без url и фрагмента строки нет. Капчу и бот-гейт не обходишь — фиксируешь отказ.
 4. **Варианты собирает скрипт, не ты.** `report.py --run R --list` нумерует строки (`--dates д1,д2` — фильтр). `--auto --nights 2-3`
-   (из опроса: ночей; `--bags 1` — чемодан; `--home WAW,WMI` — Модлин годится, иначе `--home WAW`)
+   (из опроса: ночей; `--bags 1` — чемодан; `--home WAW,WMI` — Модлин годится, иначе `--home WAW`; `--weekend` — «на выходные»)
    перебирает все поездки из строк прогона — одной строкой (Kiwi, Google) и парами плеч (fare-finder,
    Google в одну сторону) с автобусом на даты плеч — и печатает самые дешёвые до двери: `auto-1` — ★.
    Свои 1–2 варианта (удобнее, надёжнее) добавь `--variant "B=5+7"` из номеров `--list`; поездка в одну
@@ -101,8 +101,8 @@ Kiwi, fare-finder) → CONFIRMED — страница тарифа продав�
 у продавца».
 
 ## Ловушки
-- Число из головы, из `python -c`, из heredoc — не существует: Hermes такую команду блокирует
-  (`approvals.deny`), ход потерян. Только скрипты и `journal_add.py`.
+- Число из головы, `python -c`, heredoc, `execute_code` — не существует, Hermes блокирует: только скрипты, `journal_add.py`,
+  строки прогона целиком — `$S/run_show.py --run $R [--source id]`. `--title "WAW→Токио"` сканер отбивает — пиши `WAW→Tokio`.
 - Валюта = рынок вылета: адаптеры просят PLN явно (Ryanair BUD→WMI без параметра отдаёт HUF).
   Чужая валюта в строке — норма, пересчёт делает `report.py`.
 - Kiwi подставляет соседний аэропорт (WMI за WAW): `route` строки несёт фактические коды — их и называй.
