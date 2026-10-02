@@ -24,6 +24,7 @@ import asyncio
 import json
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 
 import journal
@@ -215,20 +216,31 @@ def weekend_pairs(date_from, date_to, nights):
             for n in range(nights[0], nights[1] + 1) if journal.weekend(d, d + timedelta(n))]
 
 
+WEEKEND_WORKERS = 4   # пары разом: по одной — ~1 мин на страну, «куда дешевле» шёл 12–20 мин (эвал 02.10.2026)
+
+
 def search_weekends(ns, run):
-    """По запросу на пару `weekend_pairs`; отказ одной пары — строка в stderr, остальные ищутся."""
+    """По запросу на пару `weekend_pairs`, `WEEKEND_WORKERS` разом; отказ одной пары — строка в stderr, остальные
+    ищутся. Строки — в порядке пар."""
     lo, _, hi = ns.nights.partition("-")
-    rows = []
-    for out, back in weekend_pairs(ns.date_out, ns.out_to, (int(lo), int(hi or lo))):
-        args = build_args(argparse.Namespace(**{**vars(ns), "date_out": out.isoformat(), "date_back": back.isoformat(),
-                                                "out_to": None, "nights": None}))
+    pairs = weekend_pairs(ns.date_out, ns.out_to, (int(lo), int(hi or lo)))
+    jobs = [build_args(argparse.Namespace(**{**vars(ns), "date_out": out.isoformat(), "date_back": back.isoformat(),
+                                             "out_to": None, "nights": None})) for out, back in pairs]
+
+    def one(args):
         try:
-            data = search_warm(args)
+            return search_warm(args)
         except KiwiRefused as exc:
-            print(f"Kiwi {out:%d.%m}–{back:%d.%m}: {exc}", file=sys.stderr)
-            continue
-        print(f"query: {data.get('query')}  results: {data.get('resultsCount')}")
-        rows += rows_for_itineraries(run, data, args, ns.top, wanted_dates_of(args))
+            return exc
+
+    rows = []
+    with ThreadPoolExecutor(WEEKEND_WORKERS) as pool:
+        for (out, back), args, data in zip(pairs, jobs, pool.map(one, jobs)):
+            if isinstance(data, KiwiRefused):
+                print(f"Kiwi {out:%d.%m}–{back:%d.%m}: {data}", file=sys.stderr)
+                continue
+            print(f"query: {data.get('query')}  results: {data.get('resultsCount')}")
+            rows += rows_for_itineraries(run, data, args, ns.top, wanted_dates_of(args))
     return rows
 
 
