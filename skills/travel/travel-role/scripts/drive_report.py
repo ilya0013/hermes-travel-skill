@@ -50,6 +50,19 @@ def find_or_create_folder(drive, name=FOLDER_NAME):
     ).execute()
 
 
+def hard_breaks(text):
+    """Docs склеивает строки абзаца markdown в одну (перенос строки по CommonMark мягкий); строка, кончающаяся
+    двумя пробелами, остаётся строкой — проба импорта 02.10.2026 (вопрос 11). Таблицы и заголовки — как есть."""
+    lines = text.split("\n")
+
+    def prose(line):
+        s = line.strip()
+        return bool(s) and not s.startswith(("|", "#"))
+
+    return "\n".join(line.rstrip() + "  " if prose(line) and i + 1 < len(lines) and prose(lines[i + 1]) else line
+                     for i, line in enumerate(lines))
+
+
 def create_doc(drive, folder_id, title, text):
     """Текст загружается как text/markdown с преобразованием в Google Doc — хватает права drive."""
     from googleapiclient.http import MediaIoBaseUpload
@@ -86,7 +99,7 @@ def main():
 
     drive = build_service("drive", "v3")
     folder = find_or_create_folder(drive)
-    doc = create_doc(drive, folder["id"], args.title, text)
+    doc = create_doc(drive, folder["id"], args.title, hard_breaks(text))
     print(json.dumps({"doc_url": doc.get("webViewLink", ""), "folder_url": folder.get("webViewLink", "")},
                      ensure_ascii=False))
     return 0
