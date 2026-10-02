@@ -11,7 +11,7 @@ import os
 import random
 import string
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # Маркер рекламного «от» берётся из verify_v3 (E200/E201): один регэксп на запись и проверку.
 from verify_v3 import FROM_MARKER_RE
@@ -166,6 +166,12 @@ def load_rows(path, run=None):
 
 def iso_to_ddmmyyyy(iso):
     return datetime.strptime(iso, "%Y-%m-%d").strftime("%d/%m/%Y")
+
+
+def weekend(d0, d1):
+    """Поездка «на выходные» (date вылета и возврата): ночи пятницы и субботы — там (пт→вс, чт→вс, пт→пн).
+    Эвал 02.10.2026: «на выходные в ноябре, 3 ночи» — ★ ушла на сб→вт, два рабочих дня."""
+    return any((d0 + timedelta(k)).weekday() == 4 and d0 + timedelta(k + 2) <= d1 for k in range((d1 - d0).days))
 
 
 def parse_args_file(value):

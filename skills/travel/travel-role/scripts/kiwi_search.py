@@ -5,6 +5,7 @@
     /opt/data/travel/lib/venv/bin/python kiwi_search.py WAW BCN 2026-10-09 [2026-10-12] \
         [--out-to 2026-10-31] [--nights 3-4] [--adults 1] [--max-stops 0] [--self-transfer] \
         [--airlines FR,W6] [--hold-bags 1] [--top 5]
+    /opt/data/travel/lib/venv/bin/python kiwi_search.py WAW Spain 2026-11-06 --out-to 2026-11-30 --nights 2-3 --weekends
 
 Аргументы — как у инструмента search-flight (даты там dd/mm/yyyy, здесь ISO: скрипт переводит).
 По умолчанию currency PLN и allow_self_transfer false; с --self-transfer в строках стоит
@@ -13,6 +14,9 @@ self_transfer_allowed: true — вариант может быть связко�
 dates — даты этого маршрута; kind=fare, если они совпали с запрошенными, иначе other_date.
 url — bookingUrl Kiwi; CONFIRMED только со страницы тарифа продавца.
 Тот же поиск в MCP-инструменте агента даёт то же самое, но строки журнала — только отсюда.
+`--weekends` — «на выходные»: окно с ночами отдаёт будни, поэтому скрипт сам перебирает пары окна с ночами
+пятницы и субботы там (пт→вс, чт→вс, пт→пн; `journal.weekend`) — один вызов вместо цикла агента (эвал 02.10.2026:
+10 вызовов, ~7 минут).
 """
 
 import argparse
@@ -20,6 +24,7 @@ import asyncio
 import json
 import sys
 import time
+from datetime import date, timedelta
 
 import journal
 
@@ -203,6 +208,30 @@ def wanted_dates_of(args):
     return out
 
 
+def weekend_pairs(date_from, date_to, nights):
+    """(вылет, возврат) «на выходные»: вылет в окне [date_from, date_to], ночей в `nights` (lo, hi)."""
+    d0, d1 = date.fromisoformat(date_from), date.fromisoformat(date_to)
+    return [(d, d + timedelta(n)) for d in (d0 + timedelta(k) for k in range((d1 - d0).days + 1))
+            for n in range(nights[0], nights[1] + 1) if journal.weekend(d, d + timedelta(n))]
+
+
+def search_weekends(ns, run):
+    """По запросу на пару `weekend_pairs`; отказ одной пары — строка в stderr, остальные ищутся."""
+    lo, _, hi = ns.nights.partition("-")
+    rows = []
+    for out, back in weekend_pairs(ns.date_out, ns.out_to, (int(lo), int(hi or lo))):
+        args = build_args(argparse.Namespace(**{**vars(ns), "date_out": out.isoformat(), "date_back": back.isoformat(),
+                                                "out_to": None, "nights": None}))
+        try:
+            data = search_warm(args)
+        except KiwiRefused as exc:
+            print(f"Kiwi {out:%d.%m}–{back:%d.%m}: {exc}", file=sys.stderr)
+            continue
+        print(f"query: {data.get('query')}  results: {data.get('resultsCount')}")
+        rows += rows_for_itineraries(run, data, args, ns.top, wanted_dates_of(args))
+    return rows
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("origin", help="IATA/город или @args.json с аргументами search-flight")
@@ -217,9 +246,18 @@ def main():
     ap.add_argument("--airlines", help="только эти перевозчики: FR,W6")
     ap.add_argument("--hold-bags", type=int, default=0, help="регистрируемых мест на взрослого")
     ap.add_argument("--top", type=int, default=5)
+    ap.add_argument("--weekends", action="store_true", help="«на выходные»: пары окна DATE_OUT..--out-to с --nights")
     journal.add_common_args(ap)
     ns = ap.parse_args()
     run = journal.run_id(ns)
+    if ns.weekends:
+        if ns.origin.startswith("@") or ns.date_back or not (ns.dest and ns.date_out and ns.out_to and ns.nights):
+            ap.error("--weekends: ORIGIN DEST DATE_OUT --out-to ДАТА --nights N-M, без DATE_BACK и @args.json")
+        rows = search_weekends(ns, run)
+        if not rows:
+            print("Kiwi: на выходные окна выдача пуста", file=sys.stderr)
+        journal.finish(ns, run, rows)
+        return 0 if rows else 1
 
     if ns.origin.startswith("@"):
         args = journal.parse_args_file(ns.origin)
