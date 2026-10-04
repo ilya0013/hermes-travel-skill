@@ -30,7 +30,7 @@
 Суффикс должен сходиться с url: `_api` — только для адресов API,
 `_site` — только для страниц сайта, `_feed` — запись RSS-ленты. Страница
 бронирования Ryanair — это `ryanair_site`, не `ryanair_api`; у строки `ryanair_api` страница выбора рейса лежит в `link` (для `[ссылка id]`). У `kiwi_mcp`
-url — `bookingUrl` из ответа Kiwi, у `turkish_mcp` — deeplink тарифа на turkishairlines.com, у `slicktrip_mcp` (только
+url — `bookingUrl` из ответа Kiwi, у `turkish_mcp` (строки до 04.10.2026, скрипт снят) — deeplink тарифа на turkishairlines.com, у `slicktrip_mcp` (только
 `kind: book`) — `book_url` продавца-авиакомпании (`mcp.slicktrip.com/book/…`, редирект на его оплату, живёт сутки),
 продавец — поле `seller`. Какой скрипт какой `source_id` пишет —
 `references/sources.md`.
