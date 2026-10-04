@@ -61,6 +61,7 @@ import subprocess
 import sys
 import urllib.request
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from email.utils import parsedate_to_datetime
 
@@ -765,6 +766,8 @@ def main():
     terms = split_terms(args.match)
     for note in common_word_notes(terms):   # предпроверка слов интереса (watch.md) идёт этим режимом
         print(note, file=sys.stderr)
+    with ThreadPoolExecutor(max(1, len(feed_ids))) as pool:   # разом: по очереди — 47–50 с (эвал 02.10, 04.10.2026)
+        list(pool.map(cached_feed, [f for f in feed_ids if f in FEEDS]))   # неизвестную назовёт scan, один раз
     rows, leads, summary, shown, read = scan(run, feed_ids, terms, since, args.origin, args.from_poland, seen_links)
     print("\n".join(summary + leads))
     site = site_offers(load_mail_offers(mail_offers_path(), today) or []) if "mail" in feed_ids else []

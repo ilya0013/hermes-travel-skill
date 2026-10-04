@@ -12,7 +12,7 @@ home:
       ground_note: "ZTM 75 мин 4,40 zł — цена по поиску 15.09.2026, wtp.waw.pl отдал 403; уточнить"
       ok: true
     WMI:
-      name: Modlin
+      name: Modlin                # и слово остановки: строка live_ground без него в сумму не идёт (report.py)
       ground_pln: 35              # ориентир: автобус до Модлина; живую цену даёт flixbus_fares.py
       ground_note: "ориентир 35 zł, живая цена — flixbus_fares.py (строка fare + fee)"
       live_ground: flixbus_api    # строка этого источника в варианте заменяет ориентир
