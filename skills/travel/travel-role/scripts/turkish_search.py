@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Turkish Airlines MCP (официальный сервер перевозчика, без ключа) из скрипта: выдача — строками журнала.
+"""Turkish Airlines MCP (официальный сервер перевозчика; с 04.10.2026 — вход по OAuth) из скрипта: выдача — строками журнала.
 
     /opt/data/travel/lib/venv/bin/python turkish_search.py WAW BKK 2026-11-05 [2026-11-19] \
         [--adults 1] [--bags 1] [--top 3] --run R
@@ -44,6 +44,11 @@ def post(body):
         with urllib.request.urlopen(req, timeout=120) as resp:
             _SESSION.setdefault("id", resp.headers.get("Mcp-Session-Id"))
             text = resp.read().decode("utf-8", "replace").strip()
+    except urllib.error.HTTPError as exc:
+        if exc.code == 401:          # 04.10.2026: сервер закрыт входом (OAuth, аккаунт Turkish), ключа у нас нет
+            raise TurkishError("сервер требует вход аккаунтом Turkish Airlines (401) — источника нет, не повторяй; "
+                               "Turkish есть в google_flights.py и Kiwi") from exc
+        raise TurkishError(f"HTTPError: {str(exc)[:80]}") from exc
     except (urllib.error.URLError, OSError) as exc:
         raise TurkishError(f"{type(exc).__name__}: {str(exc)[:80]}") from exc
     if not text or text.startswith("{"):

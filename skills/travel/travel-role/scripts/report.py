@@ -30,6 +30,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import airports  # noqa: E402
 import journal  # noqa: E402
+from verify_v3 import NOT_A_PRICE_SOURCES  # noqa: E402 — карта минимумов Wizz: матрица дат, не тариф
 
 PROFILE = HERE.parent / "profile.yaml"
 REPORTS = Path(os.environ.get("HERMES_HOME", "/opt/data")) / "travel" / "reports"
@@ -137,6 +138,9 @@ def parse_variant(spec, rows):
         if r.get("status") == "ORIENTIR":                  # кэш AZair/Aviasales — ориентир, не цена
             raise SystemExit(f"строка {r['id']} ({r.get('source_id')}) ORIENTIR — в вариант не идёт: "
                              "подтверди цену у продавца и сложи его строку")
+        if r.get("source_id") in NOT_A_PRICE_SOURCES:
+            raise SystemExit(f"строка {r['id']} ({r.get('source_id')}) — карта минимумов, не тариф: в вариант "
+                             "не идёт; живая цена плеча Wizz — google_flights.py --airline Wizz")
     return name.strip(), picked
 
 
@@ -292,15 +296,19 @@ def overnight(row):
     return bool(m and int(m.group(1)) * 60 + int(m.group(2)) + int(m.group(3)) * 60 + int(m.group(4)) >= 24 * 60)
 
 
-def auto_candidates(rows, sources, nights, bags, home, pax, weekend_only=False):
+def auto_candidates(rows, sources, nights, bags, home, pax, weekend_only=False, window=None):
     """Все допустимые поездки из строк прогона: строка «туда/обратно» (Kiwi, Google) или пара одиночных
     плеч (fare-finder, Google в одну сторону) с вылетом и прилётом в домашние аэропорты `home`, ночей в
-    `nights`, пассажиров `pax`; с `weekend_only` — «на выходные» (`journal.weekend`). Эвалы 15.09.2026: сборка
+    `nights`, пассажиров `pax`; с `weekend_only` — «на выходные» (`journal.weekend`); с `window` (дата, дата) —
+    поездка целиком в окне опроса. Эвалы 15.09.2026: сборка
     пар, отданная модели, три прогона подряд давала три разных ответа при одних и тех же строках (Kiwi 167 за
     связку Ryanair 65 + 65). Пара — и через два аэропорта одного города (туда в FCO, обратно из CIA:
-    `airports.CITIES`). Возвращает (кандидаты, сколько строк отброшено без багажа)."""
+    `airports.CITIES`). Карта минимумов Wizz — не тариф (эвал 04.10.2026: auto-1 = 354 из карты на чужие даты).
+    Возвращает (кандидаты, сколько строк отброшено без багажа)."""
     lo, hi = nights
+    inside = lambda a, b: not window or window[0] <= a and b <= window[1]   # noqa: E731
     flights = [r for r in rows if r.get("kind") in FLIGHT_KINDS and r.get("source_id") != "CALC"
+               and r.get("source_id") not in NOT_A_PRICE_SOURCES
                and not is_ground(r, sources) and r.get("status") != "ORIENTIR"
                and isinstance(r.get("value"), (int, float)) and r.get("pax") == pax]
     no_bags = 0
@@ -315,8 +323,8 @@ def auto_candidates(rows, sources, nights, bags, home, pax, weekend_only=False):
             start, back = segs[0].partition("-")[0], (segs[-1].partition("-")[2] if len(segs) > 1 else segs[0].partition("-")[0])
             spent = (day(d[1]) - day(d[0])).days - (1 if overnight(r) else 0)   # ночь в пути — не ночь там
             there = airports.same_city(segs[0].partition("-")[2], segs[-1].partition("-")[0]) if len(segs) > 1 else True
-            if there and lo <= spent <= hi and start in home and back in home and (   # туда в MXP, обратно из VCE — нет
-                    not weekend_only or journal.weekend(day(d[0]), day(d[1]))):
+            if there and lo <= spent <= hi and start in home and back in home and inside(day(d[0]), day(d[1])) and (
+                    not weekend_only or journal.weekend(day(d[0]), day(d[1]))):    # туда в MXP, обратно из VCE — нет
                 cands.append([r])
     singles = [r for r in flights if day(r.get("dates"))]
     for o in singles:                                    # пара плеч: X-Y туда, Y-Z обратно
@@ -326,6 +334,7 @@ def auto_candidates(rows, sources, nights, bags, home, pax, weekend_only=False):
         for b in singles:
             y2, _, z = str(b.get("route") or "").partition("-")
             if airports.same_city(y2, y) and z in home and lo <= (day(b["dates"]) - day(o["dates"])).days <= hi \
+                    and inside(day(o["dates"]), day(b["dates"])) \
                     and (not weekend_only or journal.weekend(day(o["dates"]), day(b["dates"]))):
                 cands.append([o, b])
     return cands, no_bags
@@ -399,7 +408,9 @@ def build(args, rows, profile):
     if getattr(args, "auto", False):
         home = [c.strip() for c in (args.home or ",".join(profile.get("home", {}).get("airports", {}))).split(",")]
         weekend_only = getattr(args, "weekend", False)
-        cands, no_bags = auto_candidates(rows, sources, args.nights, args.bags, home, pax, weekend_only)
+        window = getattr(args, "window", None)
+        cands, no_bags = auto_candidates(rows, sources, args.nights, args.bags, home, pax, weekend_only, window)
+        fare_map = sum(1 for r in rows if r.get("kind") in FLIGHT_KINDS and r.get("source_id") in NOT_A_PRICE_SOURCES)
         seen, priced = set(), []
         for c in cands:
             key = tuple((r.get("route"), r.get("dates"), round(r["value"])) for r in c)   # дубли Kiwi одной цены
@@ -413,9 +424,12 @@ def build(args, rows, profile):
         auto_note = (f"auto: кандидатов {len(cands)}, ночей {args.nights[0]}–{args.nights[1]}, из {','.join(home)}, "
                      f"{pax} чел., {'с багажом' if args.bags else 'без багажа'}"
                      + (", на выходные" if weekend_only else "")
+                     + (f", окно {window[0]:%d.%m}–{window[1]:%d.%m}" if window else "")
                      + (f"; без багажа отброшено строк: {no_bags}" if no_bags else "")
                      + ("" if priced else " — ни одной поездки не собрать: строк «туда/обратно» и пар плеч с такими "
-                        "ночами, аэропортами и пассажирами в прогоне нет; проверь --nights, --home, --pax"))
+                        "ночами, датами, аэропортами и пассажирами в прогоне нет; проверь --nights, --window, --home, --pax"
+                        + (f"; карта минимумов Wizz не тариф, строк не взято: {fare_map} — живая цена плеча: "
+                           "google_flights.py --airline Wizz" if fare_map else "")))
     results += [price(name, vrows) for name, vrows in variants]
     used_flights = [p for v in results for p in v["flights"]]
 
@@ -426,6 +440,7 @@ def build(args, rows, profile):
     cheapest, used_min = None, min(used_flights, default=None)   # перевозка строго дешевле вошедших в варианты
     for r in rows:
         if r.get("kind") in FLIGHT_KINDS and r.get("source_id") != "CALC" and not is_ground(r, sources) \
+                and r.get("source_id") not in NOT_A_PRICE_SOURCES \
                 and r.get("status") != "ORIENTIR" and isinstance(r.get("value"), (int, float)) \
                 and (r.get("route"), r.get("dates"), r.get("value")) not in in_variants:
             pln = pln_of(r, rows, args.run, new_rows, rates, failures)
@@ -515,6 +530,15 @@ def nights_range(text):
     return (lo, hi)
 
 
+def window_range(text):
+    a, _, b = text.partition("/")
+    lo, hi = day(a), day(b)
+    if not lo or not hi or lo > hi:
+        raise argparse.ArgumentTypeError(f"окно: «2026-11-27/2026-11-30» (вылет туда — не раньше, обратно — "
+                                         f"не позже), не {text!r}")
+    return (lo, hi)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--run", required=True)
@@ -534,6 +558,8 @@ def main():
     ap.add_argument("--home", help="для --auto: домашние аэропорты через запятую (WAW,WMI); по умолчанию все из профиля")
     ap.add_argument("--top", type=int, default=3, help="для --auto: сколько кандидатов печатать")
     ap.add_argument("--weekend", action="store_true", help="для --auto: «на выходные» — ночи пятницы и субботы там")
+    ap.add_argument("--window", type=window_range, help="для --auto, обязательно: окно опроса с допуском «2026-11-27/"
+                    "2026-11-30» — вылет туда не раньше первой даты, обратно не позже второй")
     ap.add_argument("--no-drive", action="store_true")
     ap.add_argument("--reports-dir", default=str(REPORTS))
     args = ap.parse_args()
@@ -542,6 +568,9 @@ def main():
         sys.exit("--auto без --nights: сколько ночей — из опроса, например --nights 2-3")
     if args.dates and not args.list:
         ap.error("--dates только с --list: варианты собирают --auto и --variant по всем строкам")
+    if args.auto and not args.window:   # эвал 04.10.2026: без окна auto-1 собрался на чужие даты
+        sys.exit("--auto без --window: окно дат из опроса с допуском, например --window 2026-11-27/2026-11-30 "
+                 "(«в ноябре» — 2026-11-01/2026-12-02)")
     rows, broken = run_rows(args.journal, args.run)
     if not rows:
         sys.exit(f"в журнале {args.journal} нет строк прогона {args.run}")
