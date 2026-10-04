@@ -301,7 +301,12 @@ def _book_row(row, head, call):
             return f"{head}: обратного рейса этой строки в SlickTrip нет; ссылка из строки", None
         back = f"; обратно {_flights(trip.get('return') or {})}"
     sellers = call("booking_options", {"itinerary_id": trip["itinerary_id"]}).get("sellers") or []
-    direct = [s for s in sellers if s.get("airline_direct") and not s.get("separate_tickets") and s.get("book_url")
+    # перевозчик рейса под своим именем — у перевозчика, даже без флага: эвал 04.10.2026 — Wizz Air с airline_direct
+    # false, ссылка 302 на wizzair.com
+    carriers = {str(s.get("airline") or "").lower() for part in (out.get("outbound"), trip.get("return"))
+                for s in (part or {}).get("segments") or []} - {""}
+    direct = [s for s in sellers if (s.get("airline_direct") or str(s.get("seller") or "").lower() in carriers)
+              and not s.get("separate_tickets") and s.get("book_url")
               and isinstance(s.get("price_usd"), (int, float))]   # раздельные билеты — ссылка не на всю поездку (ревью)
     if not direct:                       # агентство — не «у перевозчика»: связку агентства и так даёт Kiwi
         others = ", ".join(f"{s.get('seller')} {s.get('price_usd')} USD" for s in sellers) or "продавцов нет"
