@@ -26,8 +26,6 @@ import re
 import sys
 from pathlib import Path
 
-import yaml
-
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import airports  # noqa: E402
@@ -48,6 +46,20 @@ def is_ground(row, sources):
     return row.get("kind") == "ground" or row.get("source_id") in sources
 
 
+def wrong_stop(row, profile):
+    """Имя домашнего аэропорта, до которого строка живой дороги не доезжает: его `name` из профиля нет в тексте
+    источника (доплата — без остановок, мимо). Эвал 04.10.2026: Flixbus до Шопена записан под WAW-WMI — 7,99 вместо
+    29,99 легли в поездку через Модлин."""
+    if row.get("kind") == "fee":
+        return None
+    raw = str(row.get("raw") or "").lower()
+    for code in str(row.get("route") or "").split("-"):
+        ap = profile.get("home", {}).get("airports", {}).get(code) or {}
+        if ap.get("live_ground") == row.get("source_id") and ap.get("name") and ap["name"].lower() not in raw:
+            return ap["name"]
+    return None
+
+
 def ground_min(profile):
     raw = profile.get("report", {}).get("ground_min_pln", 0)
     try:
@@ -66,6 +78,7 @@ def run_span(rows):
 
 
 def load_profile(path):
+    import yaml   # здесь, не вверху: номера строк (`run_rows`, `pick`) берёт slicktrip.py из venv источников, где PyYAML нет
     with open(path, encoding="utf-8") as fh:
         return yaml.safe_load(fh)
 
@@ -119,7 +132,7 @@ def parse_variant(spec, rows):
     by_id = {r["id"]: r for r in rows}
     picked = [leaf for t in items.split("+") for leaf in expand(pick(t, rows), by_id)]
     for r in picked:
-        if not isinstance(r.get("value"), (int, float)) or r.get("kind") in ("rate", "diff", "lead"):
+        if not isinstance(r.get("value"), (int, float)) or r.get("kind") in ("rate", "diff", "lead", "book"):
             raise SystemExit(f"строка {r['id']} ({r.get('kind')}) в вариант не складывается")
         if r.get("status") == "ORIENTIR":                  # кэш AZair/Aviasales — ориентир, не цена
             raise SystemExit(f"строка {r['id']} ({r.get('source_id')}) ORIENTIR — в вариант не идёт: "
@@ -301,7 +314,8 @@ def auto_candidates(rows, sources, nights, bags, home, pax, weekend_only=False):
             segs = str(r.get("route") or "").split("/")
             start, back = segs[0].partition("-")[0], (segs[-1].partition("-")[2] if len(segs) > 1 else segs[0].partition("-")[0])
             spent = (day(d[1]) - day(d[0])).days - (1 if overnight(r) else 0)   # ночь в пути — не ночь там
-            if lo <= spent <= hi and start in home and back in home and (
+            there = airports.same_city(segs[0].partition("-")[2], segs[-1].partition("-")[0]) if len(segs) > 1 else True
+            if there and lo <= spent <= hi and start in home and back in home and (   # туда в MXP, обратно из VCE — нет
                     not weekend_only or journal.weekend(day(d[0]), day(d[1]))):
                 cands.append([r])
     singles = [r for r in flights if day(r.get("dates"))]
@@ -336,7 +350,7 @@ def attach_ground(flights, rows, profile, sources, pln):
             continue
         ground = [g for g in rows if g.get("source_id") == src and g.get("kind") == "ground"
                   and g.get("dates") == date and code in str(g.get("route") or "").split("-")
-                  and pln(g) is not None]
+                  and not wrong_stop(g, profile) and pln(g) is not None]
         if ground:
             g = min(ground, key=pln)
             extra += [g] + [f for f in rows if f.get("of") == g["id"]]
@@ -372,6 +386,12 @@ def build(args, rows, profile):
     pax = args.pax or profile.get("travelers", {}).get("adults", 1)
     num = {r["id"]: i for i, r in enumerate(rows, 1)}
     sources = ground_sources(profile)
+    for _, vrows in variants:
+        for r in vrows:
+            stop = wrong_stop(r, profile)
+            if stop:
+                raise SystemExit(f"строка {num[r['id']]} ({r.get('source_id')} {r.get('route')}): остановки «{stop}» "
+                                 f"в ней нет — дорога не до этого аэропорта; ищи заново с названием аэропорта")
     pln = lambda r: pln_of(r, rows, args.run, new_rows, rates, failures)   # noqa: E731
     price = lambda name, vrows: price_variant(name, vrows, rows, args.run, profile, sources, pax, num,   # noqa: E731
                                               new_rows, rates, failures)

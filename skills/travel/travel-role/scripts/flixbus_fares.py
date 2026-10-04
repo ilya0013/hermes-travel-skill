@@ -5,7 +5,8 @@
         [--pax 1] [--after 10:00] [--before 14:00] [--top 3]
 
 Города — словами, как в автокомплите Flixbus (id берётся из него каждый раз: чужой id
-даёт HTTP 400); аэропорты тоже: «Modlin», «Port lotniczy Warszawa», «Barcelona Airport».
+даёт HTTP 400); аэропорты тоже: «Modlin» — Модлин (WMI), «Port lotniczy Warszawa» — Шопен (WAW), «Barcelona Airport».
+Строку, где остановки аэропорта из `--route` нет (Шопен под WAW-WMI, эвал 04.10.2026), report.py в сумму не берёт.
 На каждый рейс из окна времени — самые дешёвые `--top` — две строки: kind=ground (дорога до
 аэропорта, цена на всех пассажиров, как отдаёт Flixbus) и kind=fee (сбор платформы, `of` → рейс).
 Статус QUOTED. `--route` — как в отчёте: коды IATA или город, `WAW-WMI`.

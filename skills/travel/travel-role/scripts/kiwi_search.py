@@ -6,6 +6,7 @@
         [--out-to 2026-10-31] [--nights 3-4] [--adults 1] [--max-stops 0] [--self-transfer] \
         [--airlines FR,W6] [--hold-bags 1] [--top 5]
     /opt/data/travel/lib/venv/bin/python kiwi_search.py WAW Spain 2026-11-06 --out-to 2026-11-30 --nights 2-3 --weekends
+    /opt/data/travel/lib/venv/bin/python kiwi_search.py WAW BTS,MLA,PFO 2026-11-01 --out-to 2026-11-30 --nights 2-3 --weekends
 
 Аргументы — как у инструмента search-flight (даты там dd/mm/yyyy, здесь ISO: скрипт переводит).
 По умолчанию currency PLN и allow_self_transfer false; с --self-transfer в строках стоит
@@ -216,28 +217,31 @@ def weekend_pairs(date_from, date_to, nights):
             for n in range(nights[0], nights[1] + 1) if journal.weekend(d, d + timedelta(n))]
 
 
-WEEKEND_WORKERS = 4   # пары разом: по одной — ~1 мин на страну, «куда дешевле» шёл 12–20 мин (эвал 02.10.2026)
+WEEKEND_WORKERS = 8   # пары разом: по одной — ~1 мин на страну (эвал 02.10.2026); 4 города × 13 пар: 4 разом — 145 с,
+                      # 8 разом — 38 с, те же 48 строк, 2 отказа сняты повтором (живьём 04.10.2026)
 
 
 def search_weekends(ns, run):
-    """По запросу на пару `weekend_pairs`, `WEEKEND_WORKERS` разом; отказ одной пары — строка в stderr, остальные
-    ищутся. Строки — в порядке пар."""
+    """По запросу на пару `weekend_pairs` и город назначения (`BTS,MLA` — несколько разом), `WEEKEND_WORKERS` разом;
+    отказ одной пары — строка в stderr, остальные ищутся. Строки — в порядке городов и пар."""
     lo, _, hi = ns.nights.partition("-")
-    pairs = weekend_pairs(ns.date_out, ns.out_to, (int(lo), int(hi or lo)))
-    jobs = [build_args(argparse.Namespace(**{**vars(ns), "date_out": out.isoformat(), "date_back": back.isoformat(),
-                                             "out_to": None, "nights": None})) for out, back in pairs]
+    pairs = [(dest, out, back) for dest in (d.strip() for d in ns.dest.split(",") if d.strip())
+             for out, back in weekend_pairs(ns.date_out, ns.out_to, (int(lo), int(hi or lo)))]
+    jobs = [build_args(argparse.Namespace(**{**vars(ns), "dest": dest, "date_out": out.isoformat(),
+                                             "date_back": back.isoformat(), "out_to": None, "nights": None}))
+            for dest, out, back in pairs]
 
     def one(args):
         try:
             return search_warm(args)
-        except KiwiRefused as exc:
+        except Exception as exc:  # noqa: BLE001 — отказ, 502, обрыв: одна пара, остальные города и даты ищутся
             return exc
 
     rows = []
     with ThreadPoolExecutor(WEEKEND_WORKERS) as pool:
-        for (out, back), args, data in zip(pairs, jobs, pool.map(one, jobs)):
-            if isinstance(data, KiwiRefused):
-                print(f"Kiwi {out:%d.%m}–{back:%d.%m}: {data}", file=sys.stderr)
+        for (dest, out, back), args, data in zip(pairs, jobs, pool.map(one, jobs)):
+            if isinstance(data, Exception):
+                print(f"Kiwi {dest} {out:%d.%m}–{back:%d.%m}: {data}", file=sys.stderr)
                 continue
             print(f"query: {data.get('query')}  results: {data.get('resultsCount')}")
             rows += rows_for_itineraries(run, data, args, ns.top, wanted_dates_of(args))

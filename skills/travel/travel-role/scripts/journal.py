@@ -138,12 +138,12 @@ def describe(row):
     )
 
 
-def finish(args, run, rows):
+def finish(args, run, rows, show=True):
     """Запись в журнал (если не --dry-run) и печать строк с их id — сначала запись:
-    оборванный вывод не должен терять строки."""
+    оборванный вывод не должен терять строки. `show=False` — без строк, только итог (сотни строк Ryanair ANY)."""
     if not args.dry_run:
         append(rows, args.journal)
-    for row in rows:
+    for row in rows if show else ():
         print(describe(row))
     if args.dry_run:
         print(f"run: {run}; --dry-run — в журнал не записано ({len(rows)} строк)")

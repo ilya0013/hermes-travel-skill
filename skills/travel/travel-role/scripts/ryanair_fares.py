@@ -3,8 +3,11 @@
 
     /opt/data/travel/lib/venv/bin/python ryanair_fares.py WMI BCN 2026-10-09 [2026-10-12] [--flex 3] [--pax 2]
     /opt/data/travel/lib/venv/bin/python ryanair_fares.py WMI BCN --month 2026-10 [--pax 2]
+    /opt/data/travel/lib/venv/bin/python ryanair_fares.py WMI,WAW ANY --month 2026-11 --nights 2-3 [--weekend] [--pax 2]
 
 `--pax N` — цена в строке на всех (на одного × N, pax=N): так `report.py --auto --pax N` берёт эти строки.
+`ANY` — «куда дешевле»: все направления из каждого аэропорта вылета одним запросом (roundTripFares, ночей `--nights`,
+`--weekend` — вылет чт/пт), плечи строками other_date; пары и сумму до двери собирает `report.py --auto`.
 
 На запрошенную дату — строка kind=fare, на соседние дни окна --flex — other_date.
 С --month — минимум по каждому дню месяца в обе стороны (эндпоинт cheapestPerDay, один
@@ -30,6 +33,7 @@ import journal
 
 SOURCE_ID = "ryanair_api"
 ENDPOINT = "https://services-api.ryanair.com/farfnd/v4/oneWayFares"
+ANYWHERE_ENDPOINT = "https://services-api.ryanair.com/farfnd/v4/roundTripFares"
 SELECT_PAGE = ("https://www.ryanair.com/pl/pl/trip/flights/select?adults={pax}&dateOut={day}"
                "&originIata={origin}&destinationIata={dest}&isReturn=false&discount=0")
 # без searchMode=ALL fare-finder отдаёт один самый дешёвый день окна, а не каждый день:
@@ -101,10 +105,89 @@ def rows_for_month(run, fares, origin, dest, url, pax=1):
     return rows
 
 
-def fetch_month(url):
+def fetch_json(url):
     req = urllib.request.Request(url, headers={"User-Agent": journal.BROWSER_UA, "Accept": "application/json"})
     with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.load(resp)["outbound"]["fares"]
+        return json.load(resp)
+
+
+def fetch_month(url):
+    return fetch_json(url)["outbound"]["fares"]
+
+
+def fetch_anywhere(url):
+    """Все страницы roundTripFares: `pageNumber` до `nextPage: null` (живьём 04.10.2026: WMI, ноябрь — 2 страницы)."""
+    fares, page, seen = [], 0, set()
+    while page is not None and page not in seen:          # `page=` API не слышит и отдаёт nextPage 1 вечно
+        seen.add(page)
+        data = fetch_json(url + (f"&pageNumber={page}" if page else ""))
+        fares += data.get("fares") or []
+        page = data.get("nextPage")
+    return fares
+
+
+def anywhere_url(origin, year_month, nights, weekend=False, currency="PLN"):
+    """roundTripFares без пункта назначения: все направления из `origin` за месяц, `nights` ночей там; `weekend` —
+    вылет чт или пт (ночи пт и сб там, как `journal.weekend`). Живьём 04.10.2026: WMI, ноябрь — 141 поездка за 4 с."""
+    first = date.fromisoformat(year_month + "-01")
+    last = (first + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+    params = {
+        "departureAirportIataCode": origin,
+        "outboundDepartureDateFrom": first.isoformat(), "outboundDepartureDateTo": last.isoformat(),
+        "inboundDepartureDateFrom": first.isoformat(),
+        "inboundDepartureDateTo": (last + timedelta(days=nights[1])).isoformat(),
+        "durationFrom": nights[0], "durationTo": nights[1],
+        **({"outboundDepartureDaysOfWeek": "THURSDAY,FRIDAY"} if weekend else {}),
+        "currency": currency, "market": "pl-pl", **SEARCH_ALL,
+    }
+    return f"{ANYWHERE_ENDPOINT}?{urlencode(params)}"
+
+
+def rows_for_anywhere(run, fares, url, pax=1):
+    """Плечи поездок roundTripFares строками other_date — по одной на маршрут и день, самая дешёвая: пары плеч и ночи
+    собирает `report.py --auto`. У Ryanair туда-обратно — два билета, цена плеча та же, что one-way."""
+    best = {}
+    for f in fares:
+        for leg in (f["outbound"], f["inbound"]):
+            price = leg["price"]
+            if price.get("currencyCode") != "PLN":
+                continue
+            o, d, day = leg["departureAirport"]["iataCode"], leg["arrivalAirport"]["iataCode"], leg["departureDate"][:10]
+            if (o, d, day) not in best or price["value"] < best[(o, d, day)]["price"]["value"]:
+                best[(o, d, day)] = leg
+    rows = []
+    for (o, d, day), leg in sorted(best.items()):
+        value, raw = for_pax(float(leg["price"]["value"]), (
+            f"{leg.get('flightNumber', '')} {leg['departureDate'][:16].replace('T', ' ')} {o}-{d} "
+            f"{leg['price']['value']:.2f} PLN (roundTripFares, Basic)"), pax)
+        rows.append(journal.observation(run, "other_date", SOURCE_ID, url, f"{o}-{d}", day, value, "PLN", "QUOTED",
+                                        raw, pax=pax, link=select_link(o, d, day, pax)))
+    return rows
+
+
+WEEKDAYS = ("пн", "вт", "ср", "чт", "пт", "сб", "вс")
+
+
+def anywhere_summary(origin, fares, pax=1, weekend=False):
+    """Города по цене: самая дешёвая поездка в каждый — агенту выбрать 2–3 города, а не читать сотни строк (ревью
+    04.10.2026: `report.py --top 8` — 7 раз Венеция на разные даты). `weekend` — только ночи пт и сб там."""
+    best = {}
+    for f in fares:
+        o, b = f["outbound"], f["inbound"]
+        if o["price"].get("currencyCode") != "PLN" or b["price"].get("currencyCode") != "PLN":
+            continue
+        if weekend and not journal.weekend(*(date.fromisoformat(x["departureDate"][:10]) for x in (o, b))):
+            continue                                       # API: вылет чт на 2 ночи — чт→сб, ночь субботы дома
+        dest, total = o["arrivalAirport"]["iataCode"], (o["price"]["value"] + b["price"]["value"]) * pax
+        if dest not in best or total < best[dest][0]:
+            best[dest] = (total, o, b)
+    day = lambda leg: (lambda d: f"{WEEKDAYS[d.weekday()]} {d:%d.%m}")(date.fromisoformat(leg["departureDate"][:10]))  # noqa: E731
+    lines = [f"{origin}: направлений {len(best)} — самая дешёвая поездка в каждое (перелёт, без дороги; пары и ★ — "
+             "report.py --auto):"]
+    for dest, (total, o, b) in sorted(best.items(), key=lambda kv: kv[1][0]):
+        place = ", ".join(x for x in (o["arrivalAirport"].get("name"), o["arrivalAirport"].get("countryName")) if x)
+        lines.append(f"  {dest} {total:.0f} PLN  {day(o)} → {day(b)}" + (f"  {place}" if place else ""))
+    return lines
 
 
 def rows_for_leg(run, flights, origin, dest, wanted, url, pax=1):
@@ -131,8 +214,12 @@ def main():
     ap.add_argument("--flex", type=int, default=0, help="±дней вокруг каждой даты")
     ap.add_argument("--month", help="YYYY-MM: весь месяц в обе стороны вместо дат")
     ap.add_argument("--pax", type=int, default=1, help="взрослых: цена в строке — на всех (на одного × N)")
+    ap.add_argument("--nights", help="для ANY: ночей «2-3» или «3»")
+    ap.add_argument("--weekend", action="store_true", help="для ANY: «на выходные» — вылет в чт или пт")
     journal.add_common_args(ap)
     args = ap.parse_args()
+    if args.dest.upper() == "ANY" and not (args.month and args.nights and re.fullmatch(r"\d+(-\d+)?", args.nights)):
+        ap.error("ANY: нужны --month YYYY-MM и --nights N-M")
     if bool(args.month) == bool(args.date_out):
         ap.error("нужна либо дата вылета, либо --month")
     if args.month and (not re.fullmatch(r"\d{4}-\d{2}", args.month) or args.flex):
@@ -146,6 +233,19 @@ def main():
         sys.exit("ryanair_api: HTTP 403 (инъекция отказа для эвала: файл .fault рядом с журналом)")
 
     rows = []
+    if args.dest.upper() == "ANY":
+        lo, _, hi = args.nights.partition("-")
+        for origin in (o.strip().upper() for o in args.origin.split(",")):   # API регистрозависим: wmi → 0
+            url = anywhere_url(origin, args.month, (int(lo), int(hi or lo)), args.weekend)
+            try:
+                fares = fetch_anywhere(url)
+            except (OSError, ValueError) as exc:          # один аэропорт упал — строки другого остаются
+                print(f"{origin}: roundTripFares не ответил ({exc})", file=sys.stderr)
+                continue
+            print("\n".join(anywhere_summary(origin, fares, args.pax, args.weekend)))
+            rows.extend(rows_for_anywhere(run, fares, url, args.pax))
+        journal.finish(args, run, rows, show=False)     # сотни плеч — в журнал; глазами — сводка и report.py --list
+        return 0 if rows else 1
     if args.month:
         for origin, dest in ((args.origin, args.dest), (args.dest, args.origin)):
             url = month_url(origin, dest, args.month)
