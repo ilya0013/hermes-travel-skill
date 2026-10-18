@@ -7,6 +7,8 @@
 (строка `book` от `slicktrip.py`, `of` → плечо), иначе страница продавца строки (`report.link_of`). Чего в ответе
 нет — дописывается блоком «Ссылки на покупку»; всё на месте или ответ не о поездке — None, текст не трогается.
 Эвал 18.10.2026: Рим — ни одной ссылки, пара Ryanair — только «туда», хотя report.py и slicktrip.py их печатали.
+Тем же проходом ★ ставится у auto-1 (`star_at_auto1`): правило роли «★ одна — у самого дешёвого до двери» модель
+обходит, когда просили тепло.
 """
 
 import re
@@ -19,7 +21,11 @@ sys.path.insert(0, str(HERE))
 import report  # noqa: E402
 
 HEAD = re.compile(r"^(\S+) = (\d+) PLN до двери \(строки ([\d+]+)\)", re.M)
-SPACE_IN_NUMBER = re.compile(r"(?<=\d)[    ](?=\d{3}(?!\d))")   # «3 330 zł» — как «3330 zł»
+AUTO = re.compile(r"^auto-\d+ = (\d+) PLN до двери \(строки ([\d+]+)\)(?! \(без)", re.M)   # с полной суммой
+AUTO_CALL = re.compile(r"^auto: кандидатов", re.M)                                        # вывод вызова с --auto
+AMOUNT = re.compile(r"(?<![\d.,])\d+\s*(?:zł|zl|зл|PLN)", re.I)
+# дата и время перед суммой не склеиваются: «08.11 200 zł» — не «08.11200» (ревью 18.10.2026)
+SPACE_IN_NUMBER = re.compile(r"(?<=\d)(?<![.:]\d)(?<![.:]\d\d)[    ](?=\d{3}(?!\d))")   # «3 330 zł» — как «3330 zł»
 
 
 URL = re.compile(r"https?://[^\s<>()\[\]«»\"']+")
@@ -43,8 +49,67 @@ def _shown(link, urls):
     return False
 
 
+def _flights(nums, rows, sources):
+    """Перелёты варианта по номерам «строки 1+2+3»: дорога и пересчёт — мимо."""
+    legs = []
+    for n in nums.split("+"):
+        if not n.isdigit() or not 1 <= int(n) <= len(rows):
+            continue
+        r = rows[int(n) - 1]
+        if r.get("kind") in report.FLIGHT_KINDS and r.get("source_id") != "CALC" and not report.is_ground(r, sources):
+            legs.append(r)
+    return legs
+
+
+def _link(r, books):
+    return (books.get(r["id"]) or {}).get("url") or report.link_of(r)
+
+
+def _leg(r):
+    dates = str(r.get("dates") or "").split("/")
+    return f"{'–'.join(_day(d) for d in dates if len(d) == 10)} {str(r.get('route') or '').replace('-', '→')}"
+
+
+def _requoted_dearer(r, rows):
+    """Плечо позже в прогоне перепроверено дороже: тот же маршрут и даты, цена в той же валюте выше. Эвал 18.10.2026
+    (Рим, 1.3.27): Kiwi 786 на рейсы Wizz, Google на те же даты — 836; агент честно взял 836."""
+    same = lambda x: (x.get("route"), x.get("dates"), x.get("currency"), x.get("pax"), report.has_bags(x))  # noqa: E731
+    return any(x.get("kind") in report.FLIGHT_KINDS and x.get("status") != "ORIENTIR"
+               and x.get("source_id") not in report.NOT_A_PRICE_SOURCES and isinstance(x.get("value"), (int, float))
+               and same(x) == same(r) and x["value"] > (r.get("value") or 0) for x in rows[rows.index(r) + 1:])
+
+
+def star_at_auto1(text, blocks, rows, books, sources):
+    """★ — у auto-1 последнего `--auto` (шаг 6 роли); плечо auto-1 позже перепроверено дороже — мерка следующий auto
+    (★ на самом auto-1 при этом не снимается). Строка со ★ и суммой, где нет ни суммы мерки, ни суммы варианта
+    дешевле неё из выводов report.py с того вызова, теряет ★; не осталось верной ★ — перед первой такой строкой
+    встаёт ★ мерки с плечами и ссылками. ★ без суммы, прогон без `--auto` и `--auto` без поездок не проверяются.
+    Текст или None. Эвал 18.10.2026 «куда дешевле, тепло — плюс»: ★ на Катании 300 «тёплее» при auto-1 Братиславе 200."""
+    start = next((i for i in range(len(blocks) - 1, -1, -1) if AUTO_CALL.search(blocks[i])), None)
+    if start is None:
+        return None
+    total, nums = next(((t, n) for t, n in AUTO.findall(blocks[start])
+                        if not any(_requoted_dearer(r, rows) for r in _flights(n, rows, sources))), (None, None))
+    if total is None:
+        return None
+    allowed = {int(total)} | {int(t) for b in blocks[start:] for _, t, _ in HEAD.findall(b) if int(t) < int(total)}
+    lines = text.split("\n")
+    flat = [SPACE_IN_NUMBER.sub("", line) for line in lines]
+    right = {i for i, f in enumerate(flat) if any(re.search(rf"(?<![\d.,]){a}(?![\d]|[.,]\d)", f) for a in allowed)}
+    stars = [i for i, line in enumerate(lines) if "★" in line]
+    wrong = [i for i in stars if i not in right and AMOUNT.search(flat[i])]
+    if not wrong:
+        return None
+    for i in wrong:
+        lines[i] = re.sub(r"★\s?", "", lines[i])
+    if not right & set(stars):
+        legs = [f"  {_leg(r)}" + (f": {link}" if (link := _link(r, books)) else "") for r in _flights(nums, rows, sources)]
+        lines[wrong[0]:wrong[0]] = [f"★ Самый дешёвый до двери — {total} zł:", *legs, ""]
+    return "\n".join(lines)
+
+
 def add_links(text, session_id, home):
-    """Текст с дописанными ссылками или None — дописывать нечего."""
+    """Текст с ★ у auto-1 и дописанными ссылками или None — менять нечего."""
     if not isinstance(text, str) or "до двери" not in text or not session_id:
         return None
     home = Path(home)
@@ -56,31 +121,29 @@ def add_links(text, session_id, home):
     journal_path = home / "travel" / "observations.jsonl"
     if not run or not draft.is_file() or not journal_path.is_file():
         return None
-    printed = draft.read_text(encoding="utf-8").rpartition("## Напечатано")[2]
+    draft_text = draft.read_text(encoding="utf-8")
+    printed = draft_text.rpartition("## Напечатано")[2]
     rows, _ = report.run_rows(str(journal_path), run)
     sources = report.ground_sources(report.load_profile(str(report.PROFILE)))
     books = {r.get("of"): r for r in rows if r.get("kind") == "book" and r.get("url")}   # последняя — свежая
+    starred = star_at_auto1(text, draft_text.split("## Напечатано")[1:], rows, books, sources)
+    text = starred or text
     flat = SPACE_IN_NUMBER.sub("", text)
     urls = [u.rstrip(".,;:!?") for u in URL.findall(text)]
-    lines, done = [], set()
+    lines, done, totals = [], set(), set()
     for name, total, nums in HEAD.findall(printed):
-        if not re.search(rf"(?<!\d){total}\s*(?:zł|zl|PLN)", flat):
+        # равные суммы (--top 8 «куда дешевле» — восемь по 200) по тексту не различить: ссылки — у первого
+        if total in totals or not re.search(rf"(?<!\d){total}\s*(?:zł|zl|PLN)", flat):
             continue
-        for n in nums.split("+"):
-            if not n.isdigit() or not 1 <= int(n) <= len(rows):
-                continue
-            r = rows[int(n) - 1]
-            if r.get("kind") not in report.FLIGHT_KINDS or r.get("source_id") == "CALC" or report.is_ground(r, sources):
-                continue
-            link = (books.get(r["id"]) or {}).get("url") or report.link_of(r)
+        totals.add(total)
+        for r in _flights(nums, rows, sources):
+            link = _link(r, books)
             if not link or link in done or _shown(link, urls):
                 continue
             done.add(link)
-            dates = str(r.get("dates") or "").split("/")
-            when = "–".join(_day(d) for d in dates if len(d) == 10)
-            lines.append(f"  {total} zł · {when} {str(r.get('route') or '').replace('-', '→')}: {link}")
+            lines.append(f"  {total} zł · {_leg(r)}: {link}")
     if not lines:
-        return None
+        return starred
     return text.rstrip() + "\n\nСсылки на покупку:\n" + "\n".join(lines)
 
 
