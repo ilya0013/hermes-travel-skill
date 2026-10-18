@@ -37,6 +37,8 @@ SOURCE_VOCAB = {
     "holidaypirates_feed",
     "pepper_feed",
     "travelpayouts_api",
+    "skiplagged_mcp",
+    "regiojet_api",
     "nbp_api",
     "CALC",
 }

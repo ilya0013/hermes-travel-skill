@@ -107,6 +107,10 @@ FEEDS = {
     "travelfree_pl": "https://travelfree.info/category/poland/feed/",
     "travelfree_asia": "https://travelfree.info/tag/asia/feed/",
     "pepper_loty": "https://www.pepper.pl/rss/grupa/bilety-lotnicze",
+    # Travel-Dealz — европейская редакция (исследование 18.10.2026): рубрика перелётов, без круизов и отелей общей ленты;
+    # вылеты со всей Европы (Вена, Берлин, «из 13 стран»), направление — в заголовке. 18.10.2026: 20 записей за 10 дней,
+    # из Вены — Бостон €341 и Мальдивы €500. travel-dealz.de — те же сделки по-немецки, не берём
+    "travel_dealz": "https://travel-dealz.com/category/flights/feed/",
     # акции из писем перевозчиков: файл `mail_sales.py --parse` (cron каждый час), не сеть; нет файла — почта
     # не подключена, лента молча не читается
     "mail": "mail:",
@@ -122,6 +126,7 @@ NOTABLE = {
     "f4f_eva": "eva air", "f4f_cathay": "cathay", "f4f_azja": "azja", "f4f_tajlandia": "tajlandia",
     "f4f_wietnam": "wietnam", "f4f_japonia": "japonia", "f4f_wyprzedaz": "wyprzedaż",
     "fly4free_com_asia": "asia", "travelfree_pl": "poland", "travelfree_asia": "asia", "pepper_loty": "loty",
+    "travel_dealz": "europe",
 }
 NOTABLE_PER_DAY = 5      # новых «заметных» за один сбор — самые свежие
 NOTABLE_IN_DIGEST = 6    # строк блока «заметное» в своде — самые свежие из накопленного за неделю
@@ -143,10 +148,11 @@ POLAND_WORDS = ("z warszawy", "warszaw", "z krakowa", "krakow", "kraków", "gda�
 NEIGHBOUR_WORDS = ("berlin", "prague", "praha", "z pragi", "vienna", "wiedeń", "wiednia", "budapest", "budapeszt",
                    "vilnius", "wilno", "z wilna", "берлин", "из праги", "из вены", "будапешт", "вильнюс")
 # ленты с вылетами со всей Европы; остальные «заметные» — польские, вылет из Польши отобрала редакция
-FOREIGN_FEEDS = ("fly4free_com_asia", "travelfree_asia")
+FOREIGN_FEEDS = ("fly4free_com_asia", "travelfree_asia", "travel_dealz")
 # общеевропейские ленты: в описании — список городов ВЫЛЕТА («Departures: Rome, Milan, Warsaw»), направление — в заголовке
 # после «to». Эвал 02.10.2026: `--match Rome,Italy` нашло Шарджу и Мальдивы — оба места «до двух на слово» заняты чужим
-DEST_IN_TITLE = ("fly4free_com", "fly4free_com_asia", "travelfree_pl", "travelfree_asia", "holidaypirates")
+DEST_IN_TITLE = ("fly4free_com", "fly4free_com_asia", "travelfree_pl", "travelfree_asia", "holidaypirates",
+                 "travel_dealz")
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) travel-role deal_feeds"
 
 # «2073 PLN», «299 zł», «1 299,99 zł», «€478», «£52», «478 EUR», «$550», «115 евро», «449 злотых»
@@ -376,7 +382,8 @@ def read_feed(feed_id):
         return parse_telegram(fetch(f"https://t.me/s/{url[3:]}"))
     items = parse_feed(fetch(url))
     if feed_id in DEST_IN_TITLE:
-        to = lambda s: s.split(" to ", 1)[1] if " to " in s else s   # noqa: E731
+        # после «from» — город вылета, не направление: «Boston: €341 … from Vienna» (Travel-Dealz, ревью 18.10.2026)
+        to = lambda s: (s.split(" to ", 1)[1] if " to " in s else s).split(" from ", 1)[0]   # noqa: E731
         for it in items:   # заголовок после «to» и рубрики «cheap flights to Seoul», «athens to the uae» (ревью 02.10.2026)
             it["match_text"] = " ".join([to(it["title"].lower()), *(to(c) for c in it.get("cats", []) if " to " in c)])
     return items
