@@ -124,6 +124,10 @@ DATE_RE = re.compile(
 RANGE_GAP_RE = re.compile(r"\s*(?:\d{1,2}[:.]\d{2}\s*(?:CET|CEST|UTC|GMT)?\s*)?,?\s*(?:\w+\s+)?(?:[-–—]|do|to|until|till)\s*",
                           re.IGNORECASE)
 WARSAW = zoneinfo.ZoneInfo("Europe/Warsaw")   # акция «30/09 00:00 CET» — по часам владельца
+# продажа до конца дня письма без даты: LOT «Szalona Środa» 07.10 и 14.10.2026 — «ważna tylko do północy»,
+# «Złap okazję przed północą»; «dziś otwieramy połączenie» и «do północnej Hiszpanii» (север) — не продажа
+SAME_DAY_RE = re.compile(r"\b(?:do|przed)\s+północ(?:y|ą)\b|\b(?:until|before)\s+midnight|\bends\s+(?:tonight|at\s+midnight)"
+                         r"|\btoday\s+only\b|\bonly\s+today\b", re.IGNORECASE)
 DISCOUNT_RE = re.compile(r"(?<![\d.,])(\d{1,2})\s?%")
 
 
@@ -193,7 +197,7 @@ def letter_dates(text, sent):
             singles.append(one)
         k += 1
     sale = min([e for s, e in spans if s <= sent <= e] + [d for d in singles if d > sent],
-               default=sent if sent in singles else None)
+               default=sent if sent in singles or SAME_DAY_RE.search(text) else None)
     later = [(s, e) for s, e in spans if sale and e > sale]
     if later:
         start, end = max(later, key=lambda p: p[1])
