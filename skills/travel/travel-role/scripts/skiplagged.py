@@ -21,7 +21,8 @@ search — `sk_flights_search`: рейсы на даты, строки QUOTED с
   билета разных перевозчиков (KLM туда, Ryanair обратно). Аэропорты Skiplagged верные: FR551 WAW→VCE — Шопен, это
   подтвердил fare-finder Ryanair (192 zł из WAW, из WMI пусто; 18.10.2026). Скрытый город (hidden city) выключен
   всегда: билет теряет обратное плечо и багаж; раздельные билеты внутри плеча (virtual interlining) — только с
-  --self-transfer, тогда в строках self_transfer_allowed: true.
+  --self-transfer, тогда в строках self_transfer_allowed: true; тот же флаг — у плеча с пересадкой между разными
+  перевозчиками и под пометкой standard («Wizz Air, Ryanair», живьём 18.10.2026).
 calendar — `sk_flex_departure_calendar`: минимум по дню вылета ±30 дней (с BACK — поездка той же длины). Сам
   Skiplagged пишет «for flexible-date price discovery, not exact itinerary selection» — строки other_date ORIENTIR,
   самые дешёвые --top внутри --window; цену выбранных дат даёт живой поиск.
@@ -38,8 +39,9 @@ import sys
 import time
 from datetime import date
 
+import airports
 import journal
-from kiwi_search import refusal_reason, weekend_pairs
+from kiwi_search import _leaves, refusal_reason, weekend_pairs
 
 SOURCE_ID = "skiplagged_mcp"
 MCP_URL = "https://mcp.skiplagged.com/mcp"
@@ -213,7 +215,10 @@ def search_rows(run, data, wanted, pax, top, self_transfer):
             dates += "/" + str(b0.get("dateTime") or "")[:10]
             raw += "; обратно " + leg_text(back, back_no)
         raw += f"; {amount} {card['price'].get('currency')}; {', '.join(card.get('attributes') or [])}"
-        extra = {"self_transfer_allowed": True} if split else {}
+        # пересадка между разными перевозчиками в одном плече — может быть два билета, даже под пометкой standard:
+        # живьём 18.10.2026 WAW→CIA «Wizz Air, Ryanair W61423+FR4225» пришло как standard, обратно — 28 ч 50 мин
+        mixed = any("," in str(leg.get("airlines") or "") and (leg.get("layovers") or 0) > 0 for leg in (card, back) if leg)
+        extra = {"self_transfer_allowed": True} if split or mixed else {}
         rows.append(journal.observation(
             run, "fare" if dates == wanted else "other_date", SOURCE_ID, card.get("deepLink") or data.get("searchUrl"),
             route, dates, float(amount), card["price"].get("currency") or "USD", "QUOTED", raw, pax=pax, **extra))
@@ -272,7 +277,7 @@ def run_anywhere(ns, run, origin, pairs, call):
             refused = True
             break
         except Exception as exc:  # noqa: BLE001 — одна пара упала, остальные ищутся
-            print(f"Skiplagged {out}–{back}: {exc}", file=sys.stderr)
+            print(f"Skiplagged {out}–{back}: {why(exc)}", file=sys.stderr)
     best, skipped = best_by_city(answers, ns.skip_country)
     rows = anywhere_rows(run, origin, best, ns.pax, ns.top or 20, "other_date" if ns.weekends else "fare")
     print(f"anywhere {origin}: пар дат {len(pairs)}, ответили {len(answers)}, городов {len(rows)}; "
@@ -288,10 +293,64 @@ def run_anywhere(ns, run, origin, pairs, call):
             print(f"Skiplagged search {dest} {out}–{back}: {exc}; проверку остальных городов не делаю", file=sys.stderr)
             break
         except Exception as exc:  # noqa: BLE001 — город без проверки остаётся ориентиром
-            print(f"Skiplagged search {dest} {out}–{back}: {exc}", file=sys.stderr)
+            print(f"Skiplagged search {dest} {out}–{back}: {why(exc)}", file=sys.stderr)
             continue
         rows += search_rows(run, data, f"{out}/{back}", ns.pax, 2, False)
     return rows
+
+
+def why(exc):
+    """Причина словами: ошибка, вылетевшая сквозь сессию MCP, приходит обёрнутой в ExceptionGroup — эвал 18.10.2026:
+    агент видел «ExceptionGroup: unhandled errors in a TaskGroup», а внутри было «Invalid value for to» (код города ROM)."""
+    return "; ".join(f"{type(e).__name__}: {str(e)[:200]}" for e in _leaves(exc))
+
+
+def airports_of(code):
+    """Аэропорты города из `airports.CITIES`; код, который сам аэропорт (WAW, VCE), или не город — пусто."""
+    aps = airports.CITIES.get(code, ())
+    return () if code in aps else aps
+
+
+def run_route(ns, run, origin, call):
+    """search и calendar на маршрут; (строки, был ли сбой). Код назначения — как дан: живьём 18.10.2026 Skiplagged
+    принял LON, PAR, MIL, TYO (сразу по аэропортам города), а ROM отверг — «Invalid value for to» (эвал, Рим). Отвергнут
+    код города — по его аэропортам из `airports.CITIES` (ROM → FCO, CIA), `--top` на каждый. Ошибка аэропорта — строка
+    в stderr, остальные ищутся; отказ сервера (блок) — остальные не спрашиваются."""
+    out = _iso(ns.rest[1])
+    back = _iso(ns.rest[2]) if len(ns.rest) == 3 else None
+    window = tuple(_iso(d) for d in ns.window.split("/")) if ns.window else None
+    code = ns.rest[0].upper()
+    dests, rows, failed = [code], [], False
+    for dest in dests:          # список растёт: отвергнутый код города → его аэропорты
+        try:
+            if ns.mode == "search":
+                data = call("sk_flights_search", search_args(origin, dest, out, back, ns.pax, ns.top or 5,
+                                                             ns.self_transfer, ns.max_stops))
+                found = search_rows(run, data, f"{out}/{back}" if back else out, ns.pax, ns.top or 5, ns.self_transfer)
+                print(f"search {origin}→{dest} {out}" + (f"–{back}" if back else "")
+                      + f": рейсов {len(data.get('flights') or [])}, строк {len(found)}")
+            else:
+                args = {"origin": origin, "destination": dest, "departureDate": out, "adults": ns.pax, "sort": "price"}
+                if back:
+                    args["returnDate"] = back
+                data = call("sk_flex_departure_calendar", args)
+                found = calendar_rows(run, data, window, ns.pax, ns.top or 10)
+                print(f"calendar {origin}→{dest}: дней в ответе {len((data.get('chart') or {}).get('points') or [])}, "
+                      f"в окне — самых дешёвых {len(found)} (ориентир для выбора дат, не тариф)")
+        except Refused as exc:
+            print(f"Skiplagged {origin}→{dest}: {exc}; остальные не спрашиваю", file=sys.stderr)
+            failed = True
+            break
+        except Exception as exc:  # noqa: BLE001 — один аэропорт упал, остальные ищутся
+            print(f"Skiplagged {origin}→{dest}: {why(exc)}", file=sys.stderr)
+            failed = True
+            if dest == code and airports_of(code):
+                dests += airports_of(code)
+                print(f"Skiplagged: код города {code} не принят — ищу по аэропортам {', '.join(airports_of(code))}",
+                      file=sys.stderr)
+            continue
+        rows += found
+    return rows, failed
 
 
 def main():
@@ -316,38 +375,18 @@ def main():
     pairs = anywhere_pairs(ns, ap) if ns.mode == "anywhere" else None
     if ns.mode != "anywhere" and len(ns.rest) not in (2, 3):
         ap.error(f"{ns.mode}: ORIGIN КУДА ВЫЛЕТ [ВОЗВРАТ]")
-    rows = []
+    rows, failed = [], False
     try:
         with session() as raw:
             call = Paced(raw)
-            if ns.mode == "anywhere":
-                rows = run_anywhere(ns, run, origin, pairs, call)
-            else:
-                dest, out = ns.rest[0].upper(), _iso(ns.rest[1])
-                back = _iso(ns.rest[2]) if len(ns.rest) == 3 else None
-                if ns.mode == "search":
-                    data = call("sk_flights_search", search_args(origin, dest, out, back, ns.pax, ns.top or 5,
-                                                                 ns.self_transfer, ns.max_stops))
-                    rows = search_rows(run, data, f"{out}/{back}" if back else out, ns.pax, ns.top or 5,
-                                       ns.self_transfer)
-                    print(f"search {origin}→{dest} {out}" + (f"–{back}" if back else "")
-                          + f": рейсов {len(data.get('flights') or [])}")
-                else:
-                    window = tuple(_iso(d) for d in ns.window.split("/")) if ns.window else None
-                    args = {"origin": origin, "destination": dest, "departureDate": out, "adults": ns.pax,
-                            "sort": "price"}
-                    if back:
-                        args["returnDate"] = back
-                    data = call("sk_flex_departure_calendar", args)
-                    rows = calendar_rows(run, data, window, ns.pax, ns.top or 10)
-                    print(f"calendar {origin}→{dest}: дней в ответе {len((data.get('chart') or {}).get('points') or [])}, "
-                          f"в окне — самых дешёвых {len(rows)} (ориентир для выбора дат, не тариф)")
+            rows, failed = ((run_anywhere(ns, run, origin, pairs, call), False) if ns.mode == "anywhere"
+                            else run_route(ns, run, origin, call))
     except Exception as exc:  # noqa: BLE001 — сбой источника одной строкой: роль ставит его в --failed
-        print(f"Skiplagged: {type(exc).__name__}: {str(exc)[:200]}", file=sys.stderr)
+        print(f"Skiplagged: {why(exc)}", file=sys.stderr)
         if not rows:            # сбой при закрытии сессии — собранное пишется
             return 1
-    if not rows:
-        print("Skiplagged: выдача пуста", file=sys.stderr)
+    if not rows:                # «выдача пуста» после сбоя читалась бы как «рейсов нет» (ревью 18.10.2026)
+        print("Skiplagged: строк нет — причина выше" if failed else "Skiplagged: выдача пуста", file=sys.stderr)
     journal.finish(ns, run, rows)
     return 0 if rows else 1
 
