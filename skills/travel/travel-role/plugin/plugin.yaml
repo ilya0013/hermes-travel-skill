@@ -1,0 +1,9 @@
+name: travel-links
+version: 1.0.0
+description: "travel-role: ссылки на покупку у каждого плеча вариантов из ответа о поездке — из журнала прогона, если агент их не дал"
+author: hermes-travel-skill
+kind: standalone
+platforms:
+  - linux
+hooks:
+  - transform_llm_output

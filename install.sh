@@ -52,6 +52,21 @@ find "$ROLE" -name __pycache__ -type d -exec rm -rf {} + 2>/dev/null || true
 [ "$OLD_HEAD" = "$(head_of "$ROLE/SKILL.md")" ] && echo "шапка роли прежняя — /restart не нужен" \
   || echo "шапка роли новая — попроси человека отправить тебе /restart, затем /new (INSTALL.md, шаг 4)"
 
+# 1б. плагин travel-links: дописывает к ответу о поездке ссылки на покупку, которых агент не дал (scripts/travel_links.py).
+# Плагины шлюз грузит при старте: новый или изменённый плагин работает после /restart; сам скрипт — сразу.
+PLUG="$H/plugins/travel-links"
+mkdir -p "$PLUG"
+if cmp -s "$ROLE/plugin/plugin.yaml" "$PLUG/plugin.yaml" && cmp -s "$ROLE/plugin/__init__.py" "$PLUG/__init__.py"; then
+  echo "плагин travel-links прежний"
+else
+  cp "$ROLE/plugin/plugin.yaml" "$ROLE/plugin/__init__.py" "$PLUG/"
+  echo "плагин travel-links новый — попроси человека отправить тебе /restart"
+fi
+if command -v hermes >/dev/null; then
+  HERMES_HOME="$H" hermes plugins enable travel-links >/dev/null 2>&1 && echo "плагин travel-links включён" \
+    || echo "внимание: hermes plugins enable travel-links не прошёл — ссылки дописываться не будут"
+fi
+
 # 2. venv источников
 if [ ! -x "$PY" ]; then
   $UV venv --python 3.13 "$VENV" >/dev/null
