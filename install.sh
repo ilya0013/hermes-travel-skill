@@ -7,7 +7,7 @@
 # каталоги travel/{reports,interest,watch}, обёртки scripts/travel/{interest_digest,mail_sales}.sh для cron.
 # Повторный запуск безопасен: роль перезаписывается, profile.yaml и журнал не трогаются.
 # --check — живой вызов Kiwi (без ключа) на пробные даты, строки в журнал не пишутся.
-# Ключи не нужны: Kiwi MCP, Ryanair, Google Flights (fast-flights), AZair, Flixbus и ленты — без них.
+# Ключи не нужны: Kiwi MCP, Skiplagged MCP, Ryanair, Google Flights (fast-flights), AZair, Flixbus, RegioJet и ленты — без них.
 set -euo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

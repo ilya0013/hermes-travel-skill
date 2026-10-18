@@ -10,12 +10,12 @@
 | поле | что в нём |
 |---|---|
 | `id` | `<ts-компакт>-<4 случайных>`, уникален в файле: `20260910T140023-a7f2` |
-| `kind` | `fare` цена перевозки на запрошенные даты · `fee` доплата · `forecast` прогноз · `benchmark` уровень цен · `other_date` цена на другие даты · `diff` разность двух чисел журнала · `lead` наводка из ленты распродаж · `rate` курс валюты к злотому · `book` ссылка на оплату у авиакомпании для плеча (`of`), цена продавца — справочно, в сумму не идёт |
+| `kind` | `fare` цена перевозки на запрошенные даты · `fee` доплата · `forecast` прогноз · `benchmark` уровень цен · `other_date` цена на другие даты · `diff` разность двух чисел журнала · `lead` наводка из ленты распродаж · `rate` курс валюты к злотому · `book` ссылка на оплату у авиакомпании для плеча (`of`), цена продавца — справочно, в сумму не идёт · `ground` наземная дорога: автобус до аэропорта (`flixbus_api`), поезд или автобус до города (`regiojet_api`) — перелётом в `report.py --auto` не считается |
 | `run` | идентификатор прогона, одинаковый у всех строк одного запроса: ts-компакт первой строки |
 | `ts` | ISO 8601 с зоной: `2026-09-10T14:00:23+02:00` |
 | `source_id` | только из словаря ниже |
 | `url` | адрес с параметрами запроса, а не голый эндпоинт; `null` только у CALC |
-| `route` | `WAW-BUD`, коды IATA; у `lead` — вылет и совпавшее слово: `WAW-tajlandia`; у `rate` — пара валют: `EUR-PLN` |
+| `route` | `WAW-BUD`, коды IATA; у `lead` — вылет и совпавшее слово: `WAW-tajlandia`; у `rate` — пара валют: `EUR-PLN`; у `regiojet_api` — города, как их пишет RegioJet: `Warszawa-Praga` (у вокзалов кодов IATA нет) |
 | `dates` | только ISO: `2026-09-18` или `2026-09-18/2026-09-20`; у `lead` — дата публикации наводки, даты поездки остаются в `raw`; у `rate` — дата курса |
 | `pax`, `value`, `currency` | число пассажиров (у `rate` — `null`), число, валюта источника кодом ISO: `PLN`, `EUR` |
 | `status` | `ORIENTIR` · `QUOTED` · `CONFIRMED` · `CALC` |
@@ -26,13 +26,15 @@
 `ryanair_site`, `ryanair_api`, `flixbus_api`, `wizzair_site`, `wizzair_api`,
 `lot_site`, `kiwi_mcp`, `turkish_mcp`, `slicktrip_mcp`, `azair_site`, `fly4free_pl_feed`, `fly4free_com_feed`,
 `wakacyjnipiraci_feed`, `holidaypirates_feed`, `pepper_feed`,
-`travelpayouts_api`, `nbp_api`, `web_site` (страница любого сайта «с глаз»: `url` и `raw`-фрагмент обязательны, статус не выше QUOTED, валюта источника — `--currency`), `CALC`.
+`travelpayouts_api`, `skiplagged_mcp`, `regiojet_api`, `nbp_api`, `web_site` (страница любого сайта «с глаз»: `url` и `raw`-фрагмент обязательны, статус не выше QUOTED, валюта источника — `--currency`), `CALC`.
 Суффикс должен сходиться с url: `_api` — только для адресов API,
 `_site` — только для страниц сайта, `_feed` — запись RSS-ленты. Страница
 бронирования Ryanair — это `ryanair_site`, не `ryanair_api`; у строки `ryanair_api` страница выбора рейса лежит в `link` (для `[ссылка id]`). У `kiwi_mcp`
 url — `bookingUrl` из ответа Kiwi, у `turkish_mcp` (строки до 04.10.2026, скрипт снят) — deeplink тарифа на turkishairlines.com, у `slicktrip_mcp` (только
 `kind: book`) — `book_url` продавца-авиакомпании (`mcp.slicktrip.com/book/…`, редирект на его оплату, живёт сутки),
-продавец — поле `seller`. Какой скрипт какой `source_id` пишет —
+продавец — поле `seller`; у `skiplagged_mcp` — страница поиска Skiplagged на эти даты (`deepLink` ответа, у рейса —
+с `#trip=<рейсы>`): строки «куда угодно» (`anywhere`) и календаря — ORIENTIR (аэропорта вылета в «куда угодно» нет:
+WAW у Skiplagged — город, Шопен или Модлин), строки поиска рейсов — QUOTED с фактическими аэропортами. Какой скрипт какой `source_id` пишет —
 `references/sources.md`.
 
 Дополнительно: `currency_observed: false`, если валюта в ответе источника
@@ -46,7 +48,7 @@ self-transfer в запросе: `true` значит, что вариант мо
 `link` — страница для человека, когда url — API: у `travelpayouts_api`
 выдача Aviasales (url строки — сам запрос к API без токена), у
 `wizzair_api` форма покупки Wizz с подставленными маршрутом, датой и
-пассажиром; `[ссылка id]` в отчёте берёт `link`, потом `url`. Строки `travelpayouts_api` всегда ORIENTIR: это
+пассажиром, у `regiojet_api` — страница выбора рейса regiojet.pl на день и число пассажиров; `[ссылка id]` в отчёте берёт `link`, потом `url`. Строки `travelpayouts_api` всегда ORIENTIR: это
 кэш чужих поисков за 48 ч, а не выдача на запрос. Строки `azair_site` тоже всегда ORIENTIR: AZair
 отдаёт свой кэш цен лоукостеров с возрастом проверки (в `raw` — «checked N h ago»), `link` —
 постоянная ссылка на связку (`flightsID`), покупка плеча — редиректом на перевозчика.
