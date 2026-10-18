@@ -619,7 +619,11 @@ def main():
     doc_text = f"# {args.title}\n\n" + "\n".join(out) + "\n\n## Все строки прогона\n\n" + table(rows, new_rows, pln_by_id)
     os.makedirs(args.reports_dir, exist_ok=True)
     draft = Path(args.reports_dir) / f"{args.run}.md"
-    draft.write_text(doc_text + "\n", encoding="utf-8")
+    # выводы прошлых вызовов прогона — следом: auto-1 первого вызова плагин travel-links сверяет с ★, когда следующие —
+    # только --variant (эвал 18.10.2026)
+    old = draft.read_text(encoding="utf-8") if draft.is_file() else ""
+    said = old.find("\n## Напечатано\n")
+    draft.write_text(doc_text + "\n" + (old[said:] if said >= 0 else ""), encoding="utf-8")
 
     if args.no_drive:
         out.append(f"таблица: {draft}")
