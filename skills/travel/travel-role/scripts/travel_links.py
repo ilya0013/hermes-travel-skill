@@ -2,7 +2,7 @@
 """Ссылки на покупку у каждого плеча вариантов, названных в ответе агента, — кодом, а не вниманием модели.
 
 Зовёт плагин Hermes `travel-links` (хук `transform_llm_output`, `../plugin/`): ответ о поездке («до двери») в сессии
-с файлом прогона `tmp/travel_run.<session_id>` сверяется с последним выводом `report.py` (блок «## Напечатано»
+с файлом прогона `tmp/travel_run.<session_id>` сверяется с выводами `report.py` с последнего `--auto` (блоки «## Напечатано»
 черновика `travel/reports/<run>.md`): вариант, чья сумма есть в ответе, — его плечи; ссылка плеча — у авиакомпании
 (строка `book` от `slicktrip.py`, `of` → плечо), иначе страница продавца строки (`report.link_of`). Чего в ответе
 нет — дописывается блоком «Ссылки на покупку»; всё на месте или ответ не о поездке — None, текст не трогается.
@@ -65,9 +65,12 @@ def _link(r, books):
     return (books.get(r["id"]) or {}).get("url") or report.link_of(r)
 
 
+def _dates(r):
+    return [d for d in str(r.get("dates") or "").split("/") if len(d) == 10]
+
+
 def _leg(r):
-    dates = str(r.get("dates") or "").split("/")
-    return f"{'–'.join(_day(d) for d in dates if len(d) == 10)} {str(r.get('route') or '').replace('-', '→')}"
+    return f"{'–'.join(_day(d) for d in _dates(r))} {str(r.get('route') or '').replace('-', '→')}"
 
 
 def _requoted_dearer(r, rows):
@@ -122,21 +125,30 @@ def add_links(text, session_id, home):
     if not run or not draft.is_file() or not journal_path.is_file():
         return None
     draft_text = draft.read_text(encoding="utf-8")
-    printed = draft_text.rpartition("## Напечатано")[2]
+    blocks = draft_text.split("## Напечатано")[1:]
+    # варианты — из выводов с последнего --auto: следом идут свои варианты агента того же запроса (эвал 18.10.2026,
+    # 1.3.32: ★ у auto-1 из вывода --auto, последний вызов — только --variant, ссылки у ★ не дописались)
+    since = next((i for i in range(len(blocks) - 1, -1, -1) if AUTO_CALL.search(blocks[i])), len(blocks) - 1)
+    printed = "\n".join(blocks[since:]) if blocks else draft_text
     rows, _ = report.run_rows(str(journal_path), run)
     sources = report.ground_sources(report.load_profile(str(report.PROFILE)))
     books = {r.get("of"): r for r in rows if r.get("kind") == "book" and r.get("url")}   # последняя — свежая
-    starred = star_at_auto1(text, draft_text.split("## Напечатано")[1:], rows, books, sources)
+    starred = star_at_auto1(text, blocks, rows, books, sources)
     text = starred or text
     flat = SPACE_IN_NUMBER.sub("", text)
     urls = [u.rstrip(".,;:!?") for u in URL.findall(text)]
-    lines, done, totals = [], set(), set()
+    named = {}
     for name, total, nums in HEAD.findall(printed):
-        # равные суммы (--top 8 «куда дешевле» — восемь по 200) по тексту не различить: ссылки — у первого
-        if total in totals or not re.search(rf"(?<!\d){total}\s*(?:zł|zl|PLN)", flat):
-            continue
-        totals.add(total)
-        for r in _flights(nums, rows, sources):
+        if re.search(rf"(?<!\d){total}\s*(?:zł|zl|зл|PLN)", flat):
+            named.setdefault(total, []).append(_flights(nums, rows, sources))
+    lines, done = [], set()
+    for total, variants in named.items():
+        if len({tuple(r["id"] for r in v) for v in variants}) > 1:
+            # равные суммы (--top 8 «куда дешевле» — восемь по 200): тот, чья ссылка уже в ответе, иначе — чьи даты
+            # плеч все названы; не различить — ссылок нет: чужое направление хуже пропущенного (ревью 18.10.2026)
+            variants = [v for v in variants if any((u := _link(r, books)) and _shown(u, urls) for r in v)] \
+                or [v for v in variants if v and all(_day(d) in text for r in v for d in _dates(r))]
+        for r in variants[0] if variants else []:
             link = _link(r, books)
             if not link or link in done or _shown(link, urls):
                 continue
