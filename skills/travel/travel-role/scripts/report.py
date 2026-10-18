@@ -421,10 +421,18 @@ def build(args, rows, profile):
         for i, v in enumerate(priced[:args.top], 1):
             v["name"] = f"auto-{i}"
             results.append(v)
+        # эвал 18.10.2026: «с 27-го по 30-е» с --nights 2-3 — ★ на 28→30, ночь владельца потеряна. Окно длиной с
+        # поездку (≤ ночей + 1: ночь в пути), а ★ по календарю короче — сказать; по --nights нельзя: ночь в пути не ночь там
+        days = [day(x) for r in (priced[0]["rows"] if priced else []) if r.get("kind") in FLIGHT_KINDS
+                and not is_ground(r, sources) for x in str(r.get("dates") or "").split("/") if day(x)]
+        short = (window and days and (window[1] - window[0]).days <= args.nights[1] + 1
+                 and (max(days) - min(days)).days < (window[1] - window[0]).days)
         auto_note = (f"auto: кандидатов {len(cands)}, ночей {args.nights[0]}–{args.nights[1]}, из {','.join(home)}, "
                      f"{pax} чел., {'с багажом' if args.bags else 'без багажа'}"
                      + (", на выходные" if weekend_only else "")
                      + (f", окно {window[0]:%d.%m}–{window[1]:%d.%m}" if window else "")
+                     + (f"; auto-1 {min(days):%d.%m}–{max(days):%d.%m} короче окна {window[0]:%d.%m}–{window[1]:%d.%m}: "
+                        "даты владельца точные — --nights по ним (ночь в пути — на одну меньше)" if short else "")
                      + (f"; без багажа отброшено строк: {no_bags}" if no_bags else "")
                      + ("" if priced else " — ни одной поездки не собрать: строк «туда/обратно» и пар плеч с такими "
                         "ночами, датами, аэропортами и пассажирами в прогоне нет; проверь --nights, --window, --home, --pax"
